@@ -269,10 +269,16 @@
   <div class="card" style="margin-top:12px">
     <h2 class="cue">片段 CUE STACK <em>横向排列可滚动；点一下＝切到该片段，选中后可用上移/下移调顺序</em></h2>
     <div id="strip"></div>
+    <input type="file" id="cfFiles" accept="video/*,image/*,.png,.jpg,.jpeg,.gif,.webp,.bmp,.avif" multiple style="display:none">
+    <input type="file" id="cfFolder" webkitdirectory directory multiple style="display:none">
+    <input type="file" id="cfZip" accept=".zip,application/zip" style="display:none">
     <div class="row">
       <button id="bUp">↑ 上移</button>
       <button id="bDown">↓ 下移</button>
       <button id="bReset">恢复默认顺序</button>
+      <span class="sep"></span>
+      <button id="bAddFiles" title="把视频 / 图片追加到大屏的片段表">＋ 素材</button>
+      <button id="bAddFolder" title="选一个文件夹，里面的视频 / 图片全部追加">＋ 文件夹</button>
       <span class="sep"></span>
       <span class="lab">卡片大小</span>
       <input type="range" id="cardW" min="100" max="260" value="150" style="width:150px">
@@ -303,6 +309,13 @@
       <label class="row" style="gap:6px"><input type="checkbox" id="meterOn"> 真实电平表</label>
       <span class="pill">不改播放路径，仅旁路取样</span>
     </div>
+    <div class="row" style="margin-top:10px">
+      <span class="lab">图片停留</span>
+      <input type="number" id="imgHold" min="1" max="600" step="1" value="5" style="width:72px">
+      <span class="lab">秒</span>
+      <label class="row" style="gap:6px"><input type="checkbox" id="imgAuto"> 图片自动前进（连播关着也走）</label>
+      <span class="pill">图片按该秒数停留；播放中会吃掉主视频的画面与时间码</span>
+    </div>
     <div class="hintline">老电脑卡就把预览帧率/尺寸调低。实时电平表会额外占用一点 CPU；若提示不可用会自动回退成推子读数。</div>
     <div class="row" style="margin-top:12px"><b style="font-size:12px;letter-spacing:1px;color:var(--ink2)">快捷键（控制台窗口内生效）</b></div>
     <div class="kv gridfix" style="margin-top:7px">
@@ -320,6 +333,7 @@
       <b>T</b><span>画面铺满 / 原始比例</span>
       <b>L</b><span>循环开关</span>
       <b>C</b><span>连播开关</span>
+      <b>I</b><span>添加素材（视频 / 图片）</span>
     </div>
   </div>
 </main>
@@ -429,6 +443,9 @@ function scrollToCur() {
   const left = cur.offsetLeft - strip.clientWidth / 2 + cur.offsetWidth / 2;
   strip.scrollLeft = Math.max(0, left);
 }
+const IMG_RE = /\.(jpg|jpeg|png|gif|webp|bmp|avif)$/i;
+function isImgClip(c) { return !!c && (c.kind === 'image' || IMG_RE.test(String(c.src || ''))); }
+function gridDur(c) { return isImgClip(c) ? '图片 ' + (c.dur || 5) + 's' : (c.dur || 0) + 's'; }
 function renderGrid() {
   const sig = order.join(',') + '|' + idx + '|' + sel + '|' + cardW;
   if (sig === gridSig) return;
@@ -444,7 +461,7 @@ function renderGrid() {
     d.innerHTML = '<div class="n"><span>' + String(pos + 1).padStart(2, '0') + '</span><span>' +
       (pos === idx ? '▶ 正在' : '') + '</span></div>' +
       '<div class="t">' + c.label.replace(/^\d+ · /, '') + '</div>' +
-      '<div class="d">' + (c.dur || 0) + 's</div>';
+      '<div class="d">' + gridDur(c) + '</div>';
     d.onclick = function () {
       sel = pos; gridSig = ''; renderGrid();
       send({ k: 'cmd', action: 'goto', idx: pos, at: 0 });
@@ -539,6 +556,8 @@ function renderState() {
   });
   $('#duck').checked = !!st.duck;
   if (document.activeElement !== $('#speed')) $('#speed').value = String(st.speed || 1);
+  if (document.activeElement !== $('#imgHold')) $('#imgHold').value = String(st.imgHold || 5);
+  if ($('#imgAuto').checked !== !!st.imgAuto) $('#imgAuto').checked = !!st.imgAuto;
   renderGrid();
 }
 
@@ -694,10 +713,8 @@ $('#bExport').onclick = function () {
   cmd({ action: 'export', prefs: consolePrefs() });
   toast('正在打包：进度显示在大屏窗口，打包期间请不要关窗口');
 };
-$('#bImport').onclick = function () {
-  cmd({ action: 'import' });
-  toast('已让大屏窗口弹出选择框，选一个 排练包-*.zip');
-};
+/* 导入包在本窗口选文件，选完直接递给大屏窗口（不靠大屏窗口的焦点） */
+$('#bImport').onclick = function () { $('#cfZip').click(); };
 function applyIncomingClips(list) {
   const cur = (st && clips[st.idx]) ? clips[st.idx].src : null;
   clips = list;
@@ -707,7 +724,7 @@ function applyIncomingClips(list) {
   gridSig = '';
   renderGrid();
   sendClips();
-  toast('已按排练包同步片段表：' + clips.length + ' 个');
+  toast('片段表已同步：' + clips.length + ' 个');
 }
 function applyConsolePrefs(p) {
   if (!p) return;
@@ -741,6 +758,33 @@ $('#cardW').addEventListener('input', function () {
   gridSig = ''; renderGrid();
 });
 $('#bCardWReset').onclick = function () { $('#cardW').value = CARD_W_DEF; applyCardW(CARD_W_DEF); gridSig = ''; renderGrid(); };
+
+/* ---------- 给大屏追加素材（文件对象直接过频道，不经服务器） ---------- */
+function sendPickedFiles(e) {
+  const picked = e.target.files ? Array.prototype.slice.call(e.target.files) : [];
+  e.target.value = '';
+  if (!picked.length) return;
+  send({ k: 'files', files: picked });
+  toast('已送出 ' + picked.length + ' 个素材，大屏窗口会接着编号');
+}
+$('#bAddFiles').onclick = function () { $('#cfFiles').click(); };
+$('#bAddFolder').onclick = function () { $('#cfFolder').click(); };
+$('#cfFiles').addEventListener('change', sendPickedFiles);
+$('#cfFolder').addEventListener('change', sendPickedFiles);
+$('#cfZip').addEventListener('change', function (e) {
+  const f = e.target.files && e.target.files[0];
+  e.target.value = '';
+  if (!f) return;
+  send({ k: 'zip', file: f });
+  toast('已把排练包送给大屏窗口：' + f.name);
+});
+$('#imgHold').addEventListener('change', function () {
+  const secs = +$('#imgHold').value || 5;
+  clips.forEach(function (c) { if (isImgClip(c)) c.dur = secs; });
+  gridSig = ''; renderGrid();
+  cmd({ action: 'imgHold', v: secs });
+});
+$('#imgAuto').addEventListener('change', function () { cmd({ action: 'imgAuto', v: $('#imgAuto').checked }); });
 
 /* ---------- 音效板 ---------- */
 function renderSfx() {
@@ -817,6 +861,7 @@ document.addEventListener('keydown', function (e) {
   if (k === 't' || k === 'T') { cmd({ action: 'fit', mode: (st && st.fit === 'cover') ? 'contain' : 'cover' }); return; }
   if (k === 'l' || k === 'L') { cmd({ action: 'loop', v: !(st && st.loop) }); return; }
   if (k === 'c' || k === 'C') { cmd({ action: 'chain', v: !(st && st.chain) }); return; }
+  if (k === 'i' || k === 'I') { $('#cfFiles').click(); return; }
   if (/^[0-9]$/.test(k)) jumpRel(keyOffset(k));
 });
 

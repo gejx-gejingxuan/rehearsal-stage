@@ -8,6 +8,10 @@
   html,body{margin:0;height:100%;overflow:hidden;background:#000;font:14px/1.5 'Microsoft YaHei',system-ui,sans-serif}
   #stage{position:fixed;inset:0;background:#000;overflow:hidden}
   #v{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000;z-index:0}
+  #img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000;z-index:0}
+  #tools{position:absolute;right:14px;bottom:14px;z-index:12;display:none;gap:8px}
+  #tools button{font:inherit;font-size:13px;padding:7px 12px;border-radius:8px;border:1px solid rgba(255,255,255,.3);background:rgba(0,0,0,.5);color:#fff;cursor:pointer}
+  #tools button:hover{background:rgba(0,0,0,.75);border-color:#fff}
   #black{position:absolute;inset:0;background:#000;z-index:40;display:none}
   #badge{position:absolute;left:16px;top:14px;z-index:10;color:#fff;background:rgba(0,0,0,.55);padding:7px 13px;border-radius:8px;font-size:13px;letter-spacing:.2px;pointer-events:none;font-variant-numeric:tabular-nums;display:none}
   #sfxTag{position:absolute;left:16px;bottom:16px;z-index:10;color:#fff;background:rgba(0,0,0,.55);padding:7px 13px;border-radius:8px;font-size:14px;pointer-events:none;display:none}
@@ -23,25 +27,27 @@
 <body>
 <div id="stage">
   <video id="v" playsinline preload="auto"></video>
+  <img id="img" alt="" style="display:none">
   <div id="black"></div>
   <div id="badge"></div>
   <div id="sfxTag"></div>
   <div id="osd"></div>
+  <div id="tools"><button id="toolAdd">＋ 素材</button><button id="toolFolder">＋ 文件夹</button></div>
   <div id="hint">
     <div class="hbox" id="hintStart">点击画面开始<small class="hs">一次点击同时解锁声音与全屏，之后交给控制台遥控</small></div>
     <div class="hbox" id="hintPick" style="display:none">
-      先选择视频素材
-      <small class="hs">选一次 <b>win7-video</b> 文件夹即可；也可以把文件夹或视频直接拖进这个窗口。<br>素材只在本机读取，不会上传到任何服务器。</small>
+      先选择视频 / 图片素材
+      <small class="hs">选一次 <b>win7-video</b> 文件夹即可；也可以把文件夹、视频、图片直接拖进这个窗口。<br>以后再想加新视频 / 图片：随时拖进来，或点右下角「＋ 素材」。<br>素材只在本机读取，不会上传到任何服务器。</small>
       <div class="picks">
         <button id="pickFolder">选择视频文件夹</button>
-        <button id="pickFiles">选择视频文件（可多选）</button>
+        <button id="pickFiles">选择视频 / 图片（可多选）</button>
         <button id="pickZip">导入排练包（zip）</button>
       </div>
       <div class="hs" id="pickMsg" style="color:#ffb8b8"></div>
     </div>
   </div>
   <input type="file" id="fileFolder" webkitdirectory directory multiple style="display:none">
-  <input type="file" id="fileFiles" accept="video/*" multiple style="display:none">
+<input type="file" id="fileFiles" accept="video/*,image/*,.png,.jpg,.jpeg,.gif,.webp,.bmp,.avif" multiple style="display:none">
 <input type="file" id="fileZip" accept=".zip,application/zip" style="display:none">
 </div>
 <script>
@@ -54,6 +60,7 @@ const bc = new BroadcastChannel(CH);
 const $ = function (s) { return document.querySelector(s); };
 
 const v = document.getElementById('v');
+const imgEl = document.getElementById('img');
 const badge = document.getElementById('badge');
 const sfxTag = document.getElementById('sfxTag');
 const osdEl = document.getElementById('osd');
@@ -69,6 +76,11 @@ let unlocked = false;
 let quiet = false;
 let duck = false, muteUser = false;
 let fit = 'contain', black = false;
+let imgMode = false;        /* 当前片段是图片 */
+let imgHold = 5;           /* 图片停留秒数 */
+let imgAuto = false;       /* 不连播时也让图片到点自动下一段 */
+let imgPaused = false;
+let imgT0 = 0, imgElapsed = 0;
 let preview = { on: true, ms: 220, w: 320 };
 let lastConsoleAt = 0;
 let pendingSeek = null;
@@ -115,6 +127,19 @@ function snapIdx(i) {
 }
 function stripNum(s) { return String(s || '').replace(/^\d+\s*·\s*/, ''); }
 function clipNow() { return clips[idx] || null; }
+/* ---------------- 图片片段（与视频混排） ---------------- */
+const IMG_RE = /\.(jpg|jpeg|png|gif|webp|bmp|avif)$/i;
+function isImgName(n) { return IMG_RE.test(String(n || '')); }
+function isImgClip(c) { if (!c) return false; return c.kind ? c.kind === 'image' : isImgName(c.src); }
+function isPlaying() { return imgMode ? !imgPaused : (!v.paused && !v.ended); }
+function imgTime() { return imgMode ? (imgPaused ? imgElapsed : imgElapsed + (Date.now() - imgT0) / 1000) : 0; }
+function imgLimit() { return clamp(imgHold, 1, 3600); }
+function setImgPaused(on) {
+  if (!imgMode) return;
+  if (on && !imgPaused) { imgElapsed = imgTime(); imgPaused = true; }
+  else if (!on && imgPaused) { imgPaused = false; imgT0 = Date.now(); }
+}
+function applyFit() { v.style.objectFit = fit; imgEl.style.objectFit = fit; }
 function send(m, transfer) { m.from = ME; if (transfer) bc.postMessage(m, transfer); else bc.postMessage(m); }
 function toast(text) { send({ k: 'toast', text: text }); }
 function osd(text, ms) {
@@ -130,15 +155,17 @@ function paint() {
   const fsOn = !!document.fullscreenElement;
   const hide = quiet || fsOn;
   const c = clipNow();
+  const toolsEl = $('#tools');
+  if (toolsEl) toolsEl.style.display = (unlocked && !hide) ? 'flex' : 'none';
   if (!unlocked || hide) {
     badge.style.display = 'none';
   } else {
     badge.style.display = 'block';
-    const dur = isFinite(v.duration) ? v.duration : (c ? c.dur : 0);
+    const dur = imgMode ? imgLimit() : (isFinite(v.duration) ? v.duration : (c ? c.dur : 0));
     const conn = (Date.now() - lastConsoleAt < 6000) ? '' : ' · 无控制台';
-    badge.textContent = (v.paused ? '\u275A\u275A ' : '\u25B6 ') +
+    badge.textContent = (isPlaying() ? '\u25B6 ' : '\u275A\u275A ') +
       (c ? (idx + 1) + '/' + clips.length + ' · ' + stripNum(c.label) : '等待片段') +
-      ' · ' + fmt(v.currentTime) + '/' + fmt(dur) +
+      ' · ' + fmt(imgMode ? imgTime() : v.currentTime) + '/' + fmt(dur) + (imgMode ? ' · 图片' : '') +
       (black ? ' · 黑场' : '') + (fit === 'cover' ? ' · 铺满' : '') + conn;
   }
   osdEl.style.display = (!hide && osdOn) ? 'block' : 'none';
@@ -258,6 +285,7 @@ function setSfxVol(x) {
 
 /* ---------------- 播放核心 ---------------- */
 function setTime(t) {
+  if (imgMode) return;   /* 图片片段没有时间轴 */
   t = Number(t);
   if (!isFinite(t) || t < 0) t = 0;
   if (v.readyState === 0) { pendingSeek = t; return; }
@@ -265,6 +293,10 @@ function setTime(t) {
 }
 function tryPlay() { const p = v.play(); if (p && p.catch) p.catch(function () {}); }
 function tryPause() { try { v.pause(); } catch (e) {} }
+function togglePlay() {
+  if (imgMode) { setImgPaused(!imgPaused); paint(); sendState(); return; }
+  if (v.paused || v.ended) tryPlay(); else tryPause();
+}
 
 function loadAt(i, at) {
   if (!clips.length) return;
@@ -274,10 +306,25 @@ function loadAt(i, at) {
   if (j !== i) { osd('缺素材：' + stripNum(clips[i].label) + ' → ' + stripNum(clips[j].label), 1400); i = j; }
   const c = clips[i];
   const abs = absUrl(c.src);
+  if (isImgClip(c)) {
+    const same = imgMode && idx === i && imgEl.src === abs;
+    idx = i;
+    imgMode = true; imgPaused = false; imgElapsed = 0; imgT0 = Date.now();
+    if (!same) {
+      try { v.pause(); } catch (e) {}
+      try { v.removeAttribute('src'); v.load(); } catch (e) {}
+      imgEl.style.display = 'block';
+      imgEl.style.objectFit = fit;
+      imgEl.src = abs;
+    }
+    paint(); sendState();
+    return;
+  }
+  if (imgMode) { imgMode = false; imgPaused = false; imgEl.style.display = 'none'; try { imgEl.removeAttribute('src'); } catch (e) {} }
   if (v.src !== abs) {
     idx = i;
     v.src = abs;
-    v.style.objectFit = fit;
+    applyFit();
     pendingSeek = Number(at) || 0;
     try { v.load(); } catch (e) {}
     tryPlay();
@@ -287,6 +334,10 @@ function loadAt(i, at) {
     tryPlay();
   }
   paint(); sendState();
+}
+function restartClip() {
+  if (imgMode) { imgElapsed = 0; imgT0 = Date.now(); imgPaused = false; paint(); sendState(); return; }
+  setTime(0); tryPlay();
 }
 function stepClip(d) {
   if (!clips.length) return;
@@ -298,6 +349,7 @@ function stepClip(d) {
   osd((d > 0 ? '\u25B6\u25B6 ' : '\u25C0\u25C0 ') + (t + 1) + '/' + clips.length + ' · ' + stripNum(clips[t].label), 1100);
 }
 function stepFrame(dir) {
+  if (imgMode) { osd('图片片段不支持逐帧', 800); return; }
   tryPause();
   const rate = (fps > 1 ? fps : 25);
   let t = (v.currentTime || 0) + dir / rate;
@@ -308,6 +360,7 @@ function stepFrame(dir) {
   sendState();
 }
 function setAb(mode) {
+  if (imgMode) { osd('图片片段不支持 AB', 800); return; }
   const t = v.currentTime || 0;
   if (mode === 'clear') { ab = { on: false, a: null, b: null }; osd('AB 已清除', 800); }
   else if (mode === 'on') { ab.on = ab.a != null && ab.b != null; }
@@ -325,6 +378,21 @@ function setAb(mode) {
     osd('B = ' + t.toFixed(1) + 's', 900);
   }
   sendState();
+}
+function nextOkFrom(start, wrap) {
+  for (let i = start; i < clips.length; i++) if (clipOk(i)) return i;
+  if (wrap) for (let i = 0; i < clips.length; i++) if (clipOk(i)) return i;
+  return -1;
+}
+/* 图片到点是否自动下一段：连播开着 or 单独开了「图片自动前进」 */
+function imgTick() {
+  if (!imgMode || imgPaused) return;
+  if (!(chain || imgAuto)) return;
+  if (imgTime() < imgLimit()) return;
+  const nx = nextOkFrom(idx + 1, false);
+  if (nx >= 0) { loadAt(nx, 0); return; }
+  if (loop) { const b = nextOkFrom(0, false); if (b >= 0) { loadAt(b, 0); return; } }
+  imgPaused = true; imgElapsed = imgLimit(); paint(); sendState();
 }
 function onEnded() {
   if (loop) { setTime(0); tryPlay(); return; }
@@ -360,9 +428,10 @@ function sendState() {
   send({
     k: 'state',
     idx: idx,
-    playing: !v.paused && !v.ended,
-    time: v.currentTime || 0,
-    dur: isFinite(v.duration) ? v.duration : (c ? c.dur : 0),
+    playing: isPlaying(),
+    time: imgMode ? imgTime() : (v.currentTime || 0),
+    dur: imgMode ? imgLimit() : (isFinite(v.duration) ? v.duration : (c ? c.dur : 0)),
+    img: imgMode, imgHold: imgLimit(), imgAuto: imgAuto, kind: isImgClip(c) ? 'image' : 'video',
     vol: v.volume,
     muted: !!v.muted,
     speed: v.playbackRate,
@@ -390,6 +459,7 @@ function sendState() {
 /* ---------------- 帧率探测 ---------------- */
 let qPrev = null, qT = 0;
 function measureFps() {
+  if (imgMode) return;
   if (typeof v.getVideoPlaybackQuality !== 'function') return;
   if (v.paused || !v.videoWidth) return;
   const q = v.getVideoPlaybackQuality();
@@ -409,13 +479,16 @@ function schedulePreview() {
 }
 function pushFrame() {
   if (!preview.on || pvBusy) return;
-  if (!v.videoWidth) return;
+  const srcEl = imgMode ? imgEl : v;
+  const sw = imgMode ? imgEl.naturalWidth : v.videoWidth;
+  const sh = imgMode ? imgEl.naturalHeight : v.videoHeight;
+  if (!sw || !sh) return;
   if (Date.now() - lastConsoleAt > 6000) return;
   pvBusy = true;
   const w = clamp(preview.w, 120, 640);
-  const h = Math.max(60, Math.round(w * v.videoHeight / v.videoWidth));
+  const h = Math.max(60, Math.round(w * sh / sw));
   if (pv.width !== w || pv.height !== h) { pv.width = w; pv.height = h; }
-  try { pv.getContext('2d').drawImage(v, 0, 0, w, h); } catch (e) { pvBusy = false; return; }
+  try { pv.getContext('2d').drawImage(srcEl, 0, 0, w, h); } catch (e) { pvBusy = false; return; }
   pv.toBlob(function (b) {
     pvBusy = false;
     if (!b) return;
@@ -529,10 +602,10 @@ function handleCmd(m) {
     case 'goto': loadAt(m.idx, m.at || 0); break;
     case 'next': stepClip(1); break;
     case 'prev': stepClip(-1); break;
-    case 'toggle': if (v.paused || v.ended) tryPlay(); else tryPause(); break;
+    case 'toggle': togglePlay(); break;
     case 'play': tryPlay(); break;
     case 'pause': tryPause(); break;
-    case 'restart': setTime(0); tryPlay(); break;
+    case 'restart': restartClip(); break;
     case 'seek': setTime(m.at); break;
     case 'seekBy': setTime((v.currentTime || 0) + Number(m.d || 0)); break;
     case 'vol': v.volume = clamp(m.v, 0, 1); break;
@@ -552,8 +625,12 @@ function handleCmd(m) {
     case 'black': black = !!m.v; blackEl.style.display = black ? 'block' : 'none'; osd(black ? '黑场' : '恢复画面', 800); paint(); break;
     case 'export': exportZip(m.prefs); break;
     case 'import': $('#fileZip').click(); break;
-    case 'fit': fit = (m.mode === 'cover') ? 'cover' : 'contain'; v.style.objectFit = fit; osd(fit === 'cover' ? '画面铺满' : '原始比例', 800); paint(); break;
+    case 'fit': fit = (m.mode === 'cover') ? 'cover' : 'contain'; applyFit(); osd(fit === 'cover' ? '画面铺满' : '原始比例', 800); paint(); break;
     case 'meters': setMeters(!!m.v); break;
+    case 'addFiles': pickOnPlayer('files'); break;
+    case 'addFolder': pickOnPlayer('folder'); break;
+    case 'imgHold': imgHold = clamp(m.v, 1, 600); clips.forEach(function (c) { if (isImgClip(c)) c.dur = imgHold; }); osd('图片停留 ' + imgHold + 's', 900); break;
+    case 'imgAuto': imgAuto = !!m.v; osd(imgAuto ? '图片自动前进：开' : '图片自动前进：关', 900); break;
     default: break;
   }
   sendState();
@@ -563,6 +640,12 @@ bc.onmessage = function (e) {
   const m = e.data;
   if (!m || m.from === ME) return;
   if (m.k === 'hello') { lastConsoleAt = Date.now(); sendState(); return; }
+  if (m.k === 'files') {
+    lastConsoleAt = Date.now();
+    const list = m.files || [];
+    if (list.length) addMedia(list);
+    return;
+  }
   if (m.k === 'clips') {
     if (Date.now() < ignoreClipsUntil) return;
     if (!booted) pendingClips = m.list; else setClips(m.list);
@@ -576,16 +659,41 @@ bc.onmessage = function (e) {
     schedulePreview();
     return;
   }
+  if (m.k === 'zip') {
+    lastConsoleAt = Date.now();
+    if (m.file) {
+      importZip(m.file).then(function () { unlockNow(); }, function (err) {
+        toast('导入失败：' + ((err && err.message) || '未知错误'));
+      });
+    }
+    return;
+  }
   if (m.k !== 'cmd') return;
   lastConsoleAt = Date.now();
   handleCmd(m);
 };
 
+/* 控制台可能只认识 clips.json 里的片段；把我们本地已经载入的素材合并保留，别被覆盖掉 */
+function mergeClips(list) {
+  const have = Object.create(null);
+  const out = [];
+  list.forEach(function (c) { if (c && c.src && !have[keyOf(c.src)]) { have[keyOf(c.src)] = 1; out.push(c); } });
+  let kept = 0;
+  clips.forEach(function (c) {
+    if (!c || !c.src || have[keyOf(c.src)]) return;
+    have[keyOf(c.src)] = 1;
+    out.push(c);
+    kept++;
+  });
+  return { list: out, kept: kept };
+}
 function setClips(list) {
   if (!Array.isArray(list) || !list.length) return;
   if (!booted) { pendingClips = list; return; }
   const first = !clips.length;
   const cur = clips[idx] ? clips[idx].src : null;
+  let extra = 0;
+  if (useMap) { const m = mergeClips(list); list = m.list; extra = m.kept; }
   clips = list;
   let pos = -1;
   if (cur) for (let i = 0; i < clips.length; i++) if (clips[i].src === cur) { pos = i; break; }
@@ -599,11 +707,13 @@ function setClips(list) {
     idx = Math.min(idx, clips.length - 1);
     loadAt(idx, 0);
   }
+  if (extra) send({ k: 'clips', list: clips });
 }
 
 /* ---------------- 解锁 ---------------- */
 function unlockNow() {
   if (!booted) return;
+  if (unlocked) { paint(); return; }
   unlocked = true;
   hint.style.display = 'none';
   tryPlay();
@@ -618,7 +728,7 @@ hint.addEventListener('click', function (e) {
 /* ---------------- 键盘 ---------------- */
 document.addEventListener('keydown', function (e) {
   const k = e.key;
-  if (k === ' ') { e.preventDefault(); if (v.paused || v.ended) tryPlay(); else tryPause(); }
+  if (k === ' ') { e.preventDefault(); togglePlay(); }
   else if (k === 'ArrowLeft') { e.preventDefault(); setTime((v.currentTime || 0) - 5); }
   else if (k === 'ArrowRight') { e.preventDefault(); setTime((v.currentTime || 0) + 5); }
   else if (k === 'ArrowUp') { e.preventDefault(); v.volume = clamp(v.volume + 0.05, 0, 1); osd('音量 ' + Math.round(v.volume * 100) + '%'); }
@@ -627,12 +737,13 @@ document.addEventListener('keydown', function (e) {
   else if (k === 'x' || k === 'X') { stopSfx(); }
   else if (k === 'f' || k === 'F') { toggleFs(); }
   else if (k === 'b' || k === 'B') { black = !black; blackEl.style.display = black ? 'block' : 'none'; osd(black ? '黑场' : '恢复画面'); }
-  else if (k === 't' || k === 'T') { fit = (fit === 'cover') ? 'contain' : 'cover'; v.style.objectFit = fit; osd(fit === 'cover' ? '画面铺满' : '原始比例'); }
+  else if (k === 't' || k === 'T') { fit = (fit === 'cover') ? 'contain' : 'cover'; applyFit(); osd(fit === 'cover' ? '画面铺满' : '原始比例'); }
+  else if (k === 'i' || k === 'I') { pickOnPlayer('files'); }
   else if (k === ',') { stepFrame(-1); }
   else if (k === '.') { stepFrame(1); }
   else if (/^[0-9]$/.test(k)) {
     const off = (k === '0') ? 5 : (parseInt(k, 10) - 5);
-    if (off === 0) { setTime(0); tryPlay(); osd('重播当前', 800); } else stepClip(off);
+    if (off === 0) { restartClip(); osd('重播当前', 800); } else stepClip(off);
   } else { return; }
   paint(); sendState();
 });
@@ -645,6 +756,7 @@ setInterval(function () {
 }, 500);
 setInterval(function () { send({ k: 'hello' }); }, 2500);
 schedulePreview();
+setInterval(imgTick, 120);
 setInterval(meterTick, 120);
 send({ k: 'hello' });
 
@@ -667,9 +779,15 @@ function showPick() {
   $('#hintStart').style.display = 'none';
   $('#hintPick').style.display = 'block';
 }
-function videoFiles(files) {
+/* 「＋ 素材」按钮 / I 键 / 控制台遥控都从这里弹选择框；浏览器要求本窗口有用户手势 */
+function pickOnPlayer(kind) {
+  const ua = navigator.userActivation;
+  if (ua && ua.isActive === false) toast('如果没弹出选择框：先在大屏窗口点一下，再点「＋ 素材」');
+  if (kind === 'folder') $('#fileFolder').click(); else $('#fileFiles').click();
+}
+function mediaFiles(files) {
   const out = [];
-  const re = /\.(mp4|m4v|mov|webm|mkv|avi|mpg|mpeg|ts)$/i;
+  const re = /\.(mp4|m4v|mov|webm|mkv|avi|mpg|mpeg|ts|jpg|jpeg|png|gif|webp|bmp|avif)$/i;
   for (let i = 0; i < (files || []).length; i++) {
     const f = files[i];
     if (f && f.name && re.test(f.name)) out.push(f);
@@ -682,60 +800,58 @@ function releaseMap() {
     delete fileMap[k];
   });
 }
-function clipKeyList() {
-  return (clips.length ? clips : (pendingClips || FALLBACK_CLIPS)).map(function (c) { return c.src; });
-}
 
-/* 用片段 src 去匹配本地文件：先同名精确命中，再去扩展名同名 / (1) 变体兜底 */
-function adoptFiles(files) {
-  const vids = videoFiles(files);
-  if (!vids.length) { showPick(); pickMsg('这里没有视频文件，请选择 win7-video 文件夹'); toast('没找到视频文件'); return; }
-  releaseMap();
-  const used = Object.create(null);
-  const keys = clipKeyList();
-  keys.forEach(function (src) {
-    const k = keyOf(src);
-    if (fileMap[k]) return;
-    for (let i = 0; i < vids.length; i++) {
-      if (used[i]) continue;
-      if (keyOf(vids[i].name) === k) { addFile(vids[i]); used[i] = 1; return; }
-    }
-  });
-  keys.forEach(function (src) {
-    const k = keyOf(src);
-    if (fileMap[k]) return;
-    const cs = k.replace(/\.[^.]+$/, '');
-    for (let i = 0; i < vids.length; i++) {
-      if (used[i]) continue;
-      const fsx = keyOf(vids[i].name).replace(/\.[^.]+$/, '');
-      if (fsx === cs || fsx === cs + '(1)' || fsx === cs + '（1）' || cs === fsx + '(1)' || cs === fsx + '（1）') {
-        addFile(vids[i]); used[i] = 1; return;
-      }
-    }
+/* 素材载入 / 增量导入：名字对上原表就补素材，对不上的按顺序追加成新片段（视频或图片） */
+function addMedia(files) {
+  const list = mediaFiles(files);
+  if (!list.length) { showPick(); pickMsg('这里没有视频 / 图片文件（支持 mp4 / jpg / png / gif / webp）'); toast('没找到视频 / 图片文件'); return; }
+  const base = (clips.length ? clips.slice() : ((pendingClips && pendingClips.length) ? pendingClips.slice() : FALLBACK_CLIPS.slice()));
+  const baseByKey = Object.create(null);
+  base.forEach(function (c) { const k = keyOf(c.src); if (!baseByKey[k]) baseByKey[k] = c; });
+
+  let filled = 0, added = 0, dup = 0, hit = 0, pics = 0;
+  const extra = [];
+  list.forEach(function (f) {
+    const k = keyOf(f.name);
+    if (fileMap[k]) { dup++; return; }
+    const matched = !!baseByKey[k];
+    if (matched) hit++;
+    addFile(f);
+    if (matched) { filled++; return; }
+    const isImg = isImgName(f.name);
+    if (isImg) pics++;
+    extra.push({ label: stripNum(f.name.replace(/\.[^.]+$/, '')), src: 'media/' + f.name, dur: isImg ? imgHold : null, kind: isImg ? 'image' : 'video' });
+    added++;
   });
 
-  const ready = (clips.length ? clips : (pendingClips || FALLBACK_CLIPS));
-  let hit = 0;
-  ready.forEach(function (c) { if (fileMap[keyOf(c.src)]) hit++; });
-  if (!hit) {
-    releaseMap(); useMap = false; booted = false;
+  if (!booted && !hit && !pics) {
+    releaseMap();
     showPick();
     pickMsg('没匹配到任何片段，请选择 win7-video 文件夹（共 24 个 mp4）');
     toast('没匹配到片段');
     return;
   }
+  if (!filled && !added) { pickMsg('这些素材已经在列表里了'); toast('没有新增素材（' + dup + ' 个重复）'); return; }
 
+  const fresh = !booted && !hit;   /* 第一次给的全是图片：片段表就只放这些图片 */
+  const std = Object.create(null);
+  FALLBACK_CLIPS.forEach(function (c) { std[keyOf(c.src)] = 1; });
+  /* 还没开播时，别人广播过来的片段表里对本窗口没用的（本地没素材、也不在标准表里）直接丢掉，免得出现幽灵卡片 */
+  const head = clips.length ? clips.slice() : (fresh ? [] : base.filter(function (c) { return !!fileMap[keyOf(c.src)] || !!std[keyOf(c.src)]; }));
+  clips = head.concat(extra).map(function (c, i) {
+    return { label: pad2(i + 1) + ' · ' + stripNum(c.label), src: c.src, dur: c.dur, kind: c.kind };
+  });
   useMap = true;
-  booted = true;
-  pickMsg('');
-  const stashed = pendingClips;
   pendingClips = null;
-  if (!clips.length) setClips(stashed && stashed.length ? stashed : FALLBACK_CLIPS);
-  $('#hintPick').style.display = 'none';
-  $('#hintStart').style.display = 'block';
-  loadAt(0, 0);
+  pickMsg('');
+  if (!booted) {
+    booted = true;
+    $('#hintPick').style.display = 'none';
+    $('#hintStart').style.display = 'block';
+    loadAt(0, 0);
+  }
   send({ k: 'clips', list: clips });
-  toast('已载入 ' + hit + '/' + clips.length + ' 个片段');
+  toast('素材：新增 ' + added + ' 个 · 补上 ' + filled + ' 个' + (dup ? ' · 跳过重复 ' + dup + ' 个' : ''));
 }
 
 function entryFiles(entry, out, depth) {
@@ -761,20 +877,27 @@ function entryFiles(entry, out, depth) {
 
 $('#pickFolder').addEventListener('click', function (e) { e.stopPropagation(); $('#fileFolder').click(); });
 $('#pickFiles').addEventListener('click', function (e) { e.stopPropagation(); $('#fileFiles').click(); });
-$('#fileFolder').addEventListener('change', function (e) { adoptFiles(e.target.files); });
-$('#fileFiles').addEventListener('change', function (e) { adoptFiles(e.target.files); });
+$('#toolAdd').addEventListener('click', function (e) { e.stopPropagation(); pickOnPlayer('files'); });
+$('#toolFolder').addEventListener('click', function (e) { e.stopPropagation(); pickOnPlayer('folder'); });
+function onPicked(e) {
+  const picked = e.target.files ? Array.prototype.slice.call(e.target.files) : [];
+  e.target.value = '';
+  if (picked.length) addMedia(picked);
+}
+$('#fileFolder').addEventListener('change', onPicked);
+$('#fileFiles').addEventListener('change', onPicked);
 
-/* 拖拽：整个文件夹或一批视频直接丢进窗口 */
+/* 拖拽：整个文件夹或一批视频 / 图片直接丢进窗口；已开播后再拖进来＝继续追加 */
 window.addEventListener('dragover', function (e) {
   e.preventDefault();
-  if (!booted) { showPick(); pickMsg('松开即载入（支持整个文件夹）'); }
+  if (!booted) { showPick(); pickMsg('松开即载入（支持整个文件夹，视频与图片都行）'); }
   if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
 });
 window.addEventListener('drop', function (e) {
   e.preventDefault();
-  if (booted) return;
   const dt = e.dataTransfer;
   if (!dt) return;
+  const wasBooted = booted;
   const items = dt.items ? Array.prototype.slice.call(dt.items) : [];
   const out = [];
   const jobs = [];
@@ -784,15 +907,15 @@ window.addEventListener('drop', function (e) {
     if (en) jobs.push(entryFiles(en, out, 0));
   });
   const fin = function () {
-    if (out.length) { adoptFiles(out); if (booted) unlockNow(); }
-    else if (dt.files && dt.files.length) { adoptFiles(dt.files); if (booted) unlockNow(); }
+    if (out.length) { addMedia(out); if (!wasBooted && booted) unlockNow(); }
+    else if (dt.files && dt.files.length) { addMedia(dt.files); if (!wasBooted && booted) unlockNow(); }
   };
   if (jobs.length) Promise.all(jobs).then(fin, fin); else fin();
 });
 
 /* 素材探测：同源已有 media/ 就直接开播（本地样本）；否则要求先选一次素材 */
 /* ---------------- 排练包：导出 / 导入 ZIP（视频只在本机打包，不上传） ---------------- */
-const VIDEO_RE = /\.(mp4|m4v|mov|webm|mkv|avi|ts)$/i;
+const MEDIA_RE = /\.(mp4|m4v|mov|webm|mkv|avi|ts|jpg|jpeg|png|gif|webp|bmp|avif)$/i;
 const AUDIO_RE = /\.(mp3|m4a|wav|ogg)$/i;
 function pad2(n) { return String(n).padStart(2, '0'); }
 const crcTable = (function () {
@@ -832,6 +955,10 @@ function guessType(n) {
   if (e === 'm4a') return 'audio/mp4';
   if (e === 'wav') return 'audio/wav';
   if (e === 'ogg') return 'audio/ogg';
+  if (e === 'jpg' || e === 'jpeg') return 'image/jpeg';
+  if (e === 'png') return 'image/png';
+  if (e === 'gif') return 'image/gif';
+  if (e === 'webp') return 'image/webp';
   return 'application/octet-stream';
 }
 async function readZipFile(file) {
@@ -931,7 +1058,7 @@ function applyPrefs(p) {
   muteUser = !!p.muted; duck = !!p.duck; quiet = !!p.quiet;
   chain = !!p.chain; loop = !!p.loop;
   black = !!p.black; blackEl.style.display = black ? 'block' : 'none';
-  fit = (p.fit === 'cover') ? 'cover' : 'contain'; v.style.objectFit = fit;
+  fit = (p.fit === 'cover') ? 'cover' : 'contain'; applyFit();
   if (p.ab && p.ab.on && p.ab.a != null) ab = { on: true, a: p.ab.a, b: p.ab.b };
   if (Array.isArray(p.sfxLoops)) p.sfxLoops.forEach(function (lb) { sfxLoopCfg[lb] = true; });
   applyLoopToSlots();
@@ -950,9 +1077,9 @@ async function importZip(file) {
   map.forEach(function (data, path) {
     const name = baseName(path);
     if (AUDIO_RE.test(name)) { const an = name.replace(/^\d{2,3}_/, ''); if (!fileMap[keyOf(an)]) addFile(new File([data], an, { type: guessType(an) })); return; }
-    if (VIDEO_RE.test(name)) vids.push({ name: name.replace(/^\d{2,3}_/, ''), data: data, path: path });
+    if (MEDIA_RE.test(name)) vids.push({ name: name.replace(/^\d{2,3}_/, ''), data: data, path: path });
   });
-  if (!vids.length) throw new Error('包里没有视频文件');
+  if (!vids.length) throw new Error('包里没有视频 / 图片文件');
   const seq = [];
   if (cfg && Array.isArray(cfg.clips)) cfg.clips.forEach(function (c) { seq.push(baseName(c.file || c.path).replace(/^\d{2,3}_/, '')); });
   if (!seq.length) seq = vids.slice().sort(function (a, b) { return a.path < b.path ? -1 : 1; }).map(function (x) { return x.name; });
@@ -970,17 +1097,18 @@ async function importZip(file) {
       break;
     }
   });
-  if (out.length) {
-    clips = out.map(function (c, i) { return { label: pad2(i + 1) + ' · ' + stripNum(c.label), src: c.src, dur: c.dur }; });
-  } else {
-    const files = vids.slice().sort(function (a, b) { return a.path < b.path ? -1 : 1; });
-    clips = files.map(function (x, i) {
-      const k = keyOf(x.name);
-      if (!fileMap[k]) addFile(new File([x.data], x.name, { type: guessType(x.name) }));
-      return { label: pad2(i + 1) + ' · ' + stripNum(x.name.replace(/\.[^.]+$/, '')), src: 'media/' + x.name, dur: null };
+  /* 包内没在原表里出现的素材（比如新加的图片）按包内顺序追加成新片段 */
+  const extra = vids.filter(function (x) { return !fileMap[keyOf(x.name)]; })
+    .sort(function (a, b) { return a.path < b.path ? -1 : 1; })
+    .map(function (x) {
+      const isImg = isImgName(x.name);
+      addFile(new File([x.data], x.name, { type: guessType(x.name) }));
+      return { label: stripNum(x.name.replace(/\.[^.]+$/, '')), src: 'media/' + x.name, dur: isImg ? imgHold : null, kind: isImg ? 'image' : 'video' };
     });
-    skip = 0;
-  }
+  const head = out.length ? out : [];
+  clips = head.map(function (c, i) { return { label: pad2(i + 1) + ' · ' + stripNum(c.label), src: c.src, dur: c.dur, kind: c.kind }; })
+    .concat(extra.map(function (c, i) { return { label: pad2(head.length + i + 1) + ' · ' + c.label, src: c.src, dur: c.dur, kind: c.kind }; }));
+  skip = extra.length;
   if (!clips.length) throw new Error('包里的素材认不出来');
   useMap = true;
   booted = true;
@@ -995,7 +1123,7 @@ async function importZip(file) {
   if (cfg && cfg.console) send({ k: 'prefs', prefs: cfg.console });
   let miss = 0;
   clips.forEach(function (c) { if (!fileMap[keyOf(c.src)]) miss++; });
-  toast('已导入 ' + clips.length + ' 个片段' + (skip ? '（包内 ' + skip + ' 个素材不认识，已忽略）' : '') + (miss ? '，其中 ' + miss + ' 个缺素材' : ''));
+  toast('已导入 ' + clips.length + ' 个片段' + (skip ? '（包内新增 ' + skip + ' 个）' : '') + (miss ? '，其中 ' + miss + ' 个缺素材' : ''));
 }
 $('#pickZip').addEventListener('click', function (e) { e.stopPropagation(); $('#fileZip').click(); });
 $('#fileZip').addEventListener('change', function (e) {
@@ -1046,8 +1174,8 @@ window.__dbg = function () {
   const c = clipNow();
   return {
     idx: idx, count: clips.length, label: c ? c.label : '',
-    paused: v.paused, playing: !v.paused && !v.ended,
-    time: v.currentTime, dur: isFinite(v.duration) ? v.duration : (c ? c.dur : 0),
+    paused: imgMode ? imgPaused : v.paused, playing: isPlaying(),
+    time: imgMode ? imgTime() : v.currentTime, dur: imgMode ? imgLimit() : (isFinite(v.duration) ? v.duration : (c ? c.dur : 0)),
     vol: v.volume, muted: !!v.muted, speed: v.playbackRate,
     unlocked: unlocked, quiet: quiet, duck: duck, chain: chain, loop: loop,
     ab: { on: ab.on, a: ab.a, b: ab.b },
@@ -1056,6 +1184,9 @@ window.__dbg = function () {
     fs: !!document.fullscreenElement, fit: fit, black: black, fps: fps,
     metersOn: meter.on, meterOk: !!meter.ok, meterV: meter.v, meterS: meter.s,
     booted: booted, useMap: useMap, mapCount: Object.keys(fileMap).length,
+    pending: pendingClips ? pendingClips.length : 0,
+    img: imgMode, imgHold: imgLimit(), imgAuto: imgAuto, imgPaused: imgPaused, imgTime: imgTime(), imgClips: clips.filter(isImgClip).length,
+    labels: clips.map(function (x) { return x.label; }),
     previewOn: preview.on, src: v.src
   };
 };

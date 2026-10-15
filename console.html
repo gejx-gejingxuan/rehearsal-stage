@@ -956,8 +956,8 @@ document.addEventListener('keydown', function (e) {
 })();
 
 Promise.all([
-  fetch('clips.json').then(function (r) { return r.json(); }),
-  fetch('sfx.json').then(function (r) { return r.json(); }).catch(function () { return []; })
+  fetch('clips.json', { cache: 'no-store' }).then(function (r) { return r.json(); }),
+  fetch('sfx.json', { cache: 'no-store' }).then(function (r) { return r.json(); }).catch(function () { return []; })
 ]).then(function (res) {
   clips = res[0];
   sfxList = res[1] || [];

@@ -150,6 +150,166 @@ function osd(text, ms) {
   paint();
 }
 
+/* ---------------- 缩略图（后台串行抽帧，只发给控制台显卡片，不干扰播放） ---------------- */
+const THUMB_VID_W = 160;      /* 视频缩略图宽度 */
+const THUMB_IMG_W = 320;      /* 图片缩略图宽度 */
+const THUMB_GAP = 240;        /* 两个片段之间歇一下，老电脑更稳 */
+const THUMB_MIN_SCORE = 10;   /* 亮度标准差低于此值算黑场，换个时间点再试 */
+const thumbMap = Object.create(null);      /* src -> dataURL / 图片直链 */
+const thumbPending = Object.create(null);
+const thumbFailed = Object.create(null);
+let thumbOn = true;                        /* 控制台可关掉，老电脑省点力气 */
+let thumbChain = Promise.resolve();
+
+function frameFlatScore(cv) {
+  try {
+    const d = cv.getContext('2d').getImageData(0, 0, cv.width, cv.height).data;
+    let n = 0, sum = 0, sum2 = 0;
+    for (let i = 0; i < d.length; i += 12) {
+      const y = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+      sum += y; sum2 += y * y; n++;
+    }
+    if (!n) return 0;
+    const mean = sum / n;
+    return Math.sqrt(Math.max(0, sum2 / n - mean * mean));
+  } catch (e) { return 999; }
+}
+
+/* 离屏 video 抽一帧（挑最不“空”的那帧，避开片头黑场） */
+function makeVideoThumb(url) {
+  return new Promise(function (resolve) {
+    const el = document.createElement('video');
+    let settled = false, waiting = false, hardTimer = null, seekTimer = null, paintTimer = null;
+    let dur = 0, plan = [], nextAt = 0, best = null;
+    function stop() {
+      if (hardTimer) clearTimeout(hardTimer);
+      if (seekTimer) clearTimeout(seekTimer);
+      if (paintTimer) clearTimeout(paintTimer);
+      try { el.removeAttribute('src'); el.load(); } catch (e) {}
+    }
+    function done() {
+      if (settled) return;
+      settled = true;
+      stop();
+      resolve(best ? best.thumb : null);
+    }
+    function seekNext() {
+      if (settled) return;
+      if (nextAt >= plan.length) return done();
+      try { el.currentTime = plan[nextAt++]; } catch (e) { return done(); }
+      waiting = true;
+      seekTimer = setTimeout(function () { if (waiting) grab(); }, 1200);
+    }
+    function grab() {
+      if (settled || !waiting) return;
+      waiting = false;
+      if (seekTimer) { clearTimeout(seekTimer); seekTimer = null; }
+      if (paintTimer) { clearTimeout(paintTimer); paintTimer = null; }
+      const vw = el.videoWidth, vh = el.videoHeight;
+      if (vw && vh) {
+        try {
+          const tw = THUMB_VID_W, th = Math.max(1, Math.round(vh * tw / vw));
+          const cv = document.createElement('canvas');
+          cv.width = tw; cv.height = th;
+          cv.getContext('2d').drawImage(el, 0, 0, tw, th);
+          const score = frameFlatScore(cv);
+          if (!best || score > best.score) best = { thumb: cv.toDataURL('image/jpeg', 0.72), score: score };
+        } catch (e) {}
+      }
+      if (best && best.score >= THUMB_MIN_SCORE) return done();
+      seekNext();
+    }
+    el.onseeked = function () {
+      if (!waiting || settled) return;
+      if (seekTimer) { clearTimeout(seekTimer); seekTimer = null; }
+      if (paintTimer) clearTimeout(paintTimer);
+      paintTimer = setTimeout(grab, 90);   /* 等一帧真画出来再取像 */
+    };
+    hardTimer = setTimeout(done, 9000);
+    el.preload = 'metadata'; el.muted = true; el.playsInline = true;
+    el.onloadedmetadata = function () {
+      dur = el.duration;
+      if (!el.videoWidth) return done();
+      const d = (isFinite(dur) && dur > 0) ? dur : 1;
+      plan = [Math.min(Math.max(0.3, d * 0.12), 4)];
+      if (d > 6) plan.push(Math.min(Math.max(plan[0] + 1.2, d * 0.55), d - 0.15));
+      seekNext();
+    };
+    el.onerror = function () { done(); };
+    el.src = url;
+  });
+}
+
+/* 图片缩成小图；画不动（极少见）就直接把原图地址给控制台 */
+function makeImgThumb(url) {
+  return new Promise(function (resolve) {
+    const im = new Image();
+    let settled = false;
+    const fin = function (out) { if (settled) return; settled = true; resolve(out); };
+    const timer = setTimeout(function () { fin(null); }, 8000);
+    im.onload = function () {
+      clearTimeout(timer);
+      const w = im.naturalWidth || 0, h = im.naturalHeight || 0;
+      if (!w || !h) return fin(null);
+      const tw = Math.min(THUMB_IMG_W, w), th = Math.max(1, Math.round(h * tw / w));
+      try {
+        const cv = document.createElement('canvas');
+        cv.width = tw; cv.height = th;
+        cv.getContext('2d').drawImage(im, 0, 0, tw, th);
+        fin(cv.toDataURL('image/jpeg', 0.78));
+      } catch (e) { fin(url); }
+    };
+    im.onerror = function () { clearTimeout(timer); fin(null); };
+    im.src = url;
+  });
+}
+
+function enqueueThumb(task) {
+  thumbChain = thumbChain
+    .then(function () { return new Promise(function (r) { setTimeout(r, THUMB_GAP); }); })
+    .then(task)
+    .catch(function () {});
+  return thumbChain;
+}
+function thumbOf(c) { return (c && c.src) ? (thumbMap[c.src] || null) : null; }
+function sendThumbsAll() {
+  const all = {};
+  clips.forEach(function (c) { const t = thumbOf(c); if (t) all[c.src] = t; });
+  send({ k: 'thumbs', all: all });
+}
+/* 没人在看控制台就别白耗 CPU（控制台每 2.5s 回应一次 hello） */
+/* 片段表一变就调它：把缺的缩略图排进后台队列 */
+function consoleNear() { return Date.now() - lastConsoleAt < 60000; }
+function syncThumbs() {
+  if (!clips.length) return;
+  if (!thumbOn) return;
+  if (!consoleNear()) return;
+  clips.forEach(function (c) {
+    if (!c || !c.src) return;
+    const src = c.src;
+    if (useMap && !fileMap[keyOf(src)]) return;   /* 本窗口没这个素材，别去 404 浪费时间 */
+    if (thumbMap[src] || thumbPending[src] || thumbFailed[src]) return;
+    const isImg = isImgClip(c);
+    const url = absUrl(src);
+    thumbPending[src] = 1;
+    enqueueThumb(function () {
+      return (isImg ? makeImgThumb(url) : makeVideoThumb(url)).then(function (data) {
+        delete thumbPending[src];
+        if (!data) { thumbFailed[src] = 1; return; }
+        thumbMap[src] = data;
+        const add = {}; add[src] = data;
+        send({ k: 'thumbs', add: add });
+      });
+    });
+  });
+}
+function clearThumbs() {
+  [thumbMap, thumbPending, thumbFailed].forEach(function (m) {
+    Object.keys(m).forEach(function (k) { delete m[k]; });
+  });
+}
+
+
 /* ---------------- 画面上的浮层 ---------------- */
 function paint() {
   const fsOn = !!document.fullscreenElement;
@@ -452,7 +612,8 @@ function sendState() {
     black: black,
     metersOn: meter.on,
     meterOk: !!meter.ok,
-    preview: preview.on
+    preview: preview.on,
+    thumbsOn: thumbOn
   });
 }
 
@@ -631,6 +792,11 @@ function handleCmd(m) {
     case 'addFolder': pickOnPlayer('folder'); break;
     case 'imgHold': imgHold = clamp(m.v, 1, 600); clips.forEach(function (c) { if (isImgClip(c)) c.dur = imgHold; }); osd('图片停留 ' + imgHold + 's', 900); break;
     case 'imgAuto': imgAuto = !!m.v; osd(imgAuto ? '图片自动前进：开' : '图片自动前进：关', 900); break;
+    case 'thumbs':
+      thumbOn = !!m.v;
+      if (thumbOn) { Object.keys(thumbFailed).forEach(function (k) { delete thumbFailed[k]; }); syncThumbs(); }
+      osd(thumbOn ? '缩略图：开' : '缩略图：关', 900);
+      break;
     default: break;
   }
   sendState();
@@ -639,7 +805,7 @@ function handleCmd(m) {
 bc.onmessage = function (e) {
   const m = e.data;
   if (!m || m.from === ME) return;
-  if (m.k === 'hello') { lastConsoleAt = Date.now(); sendState(); return; }
+  if (m.k === 'hello') { lastConsoleAt = Date.now(); sendState(); sendThumbsAll(); syncThumbs(); return; }
   if (m.k === 'files') {
     lastConsoleAt = Date.now();
     const list = m.files || [];
@@ -708,6 +874,7 @@ function setClips(list) {
     loadAt(idx, 0);
   }
   if (extra) send({ k: 'clips', list: clips });
+  syncThumbs();
 }
 
 /* ---------------- 解锁 ---------------- */
@@ -799,6 +966,7 @@ function releaseMap() {
     try { URL.revokeObjectURL(fileMap[k].url); } catch (e) {}
     delete fileMap[k];
   });
+  clearThumbs();
 }
 
 /* 素材载入 / 增量导入：名字对上原表就补素材，对不上的按顺序追加成新片段（视频或图片） */
@@ -852,6 +1020,7 @@ function addMedia(files) {
   }
   send({ k: 'clips', list: clips });
   toast('素材：新增 ' + added + ' 个 · 补上 ' + filled + ' 个' + (dup ? ' · 跳过重复 ' + dup + ' 个' : ''));
+  syncThumbs();
 }
 
 function entryFiles(entry, out, depth) {
@@ -1120,6 +1289,7 @@ async function importZip(file) {
   loadAt(0, 0);
   send({ k: 'clips', list: clips });
   applyPrefs(cfg && cfg.prefs);
+  syncThumbs();
   if (cfg && cfg.console) send({ k: 'prefs', prefs: cfg.console });
   let miss = 0;
   clips.forEach(function (c) { if (!fileMap[keyOf(c.src)]) miss++; });
@@ -1187,6 +1357,8 @@ window.__dbg = function () {
     pending: pendingClips ? pendingClips.length : 0,
     img: imgMode, imgHold: imgLimit(), imgAuto: imgAuto, imgPaused: imgPaused, imgTime: imgTime(), imgClips: clips.filter(isImgClip).length,
     labels: clips.map(function (x) { return x.label; }),
+    thumbs: clips.filter(function (x) { return !!thumbMap[x.src]; }).length,
+    thumbsOn: thumbOn, thumbPending: Object.keys(thumbPending).length,
     previewOn: preview.on, src: v.src
   };
 };

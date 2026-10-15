@@ -113,7 +113,7 @@
 
   /* ---------- 片段 cue 列表 ---------- */
   #strip{display:flex;flex-wrap:nowrap;gap:7px;overflow-x:auto;overflow-y:hidden;padding:4px 2px 10px;scroll-behavior:smooth}
-  .clip{flex:0 0 auto;width:var(--card-w);background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--line2);border-radius:6px;padding:7px 9px;cursor:pointer;transition:.12s;overflow:hidden}
+  .clip{flex:0 0 auto;width:var(--card-w);background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--line2);border-radius:6px;padding:0 0 4px;cursor:pointer;transition:.12s;overflow:hidden}
   .clip:hover{border-color:var(--blue);border-left-color:var(--blue)}
   .clip.cur{border-color:var(--amber);border-left-color:var(--amber);background:rgba(255,176,32,.10);box-shadow:0 0 0 1px rgba(255,176,32,.35) inset}
   .clip.sel{border-color:var(--cyan);border-left-color:var(--cyan)}
@@ -121,6 +121,13 @@
   .clip.cur .n{color:var(--amber)}
   .clip .t{font-size:13px;margin:2px 0 3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
   .clip .d{font-family:var(--mono);font-size:11px;color:var(--ink3)}
+  .clip .th{position:relative;width:100%;aspect-ratio:16/9;background:var(--sunk);border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:center;overflow:hidden}
+  .clip .th img{width:100%;height:100%;object-fit:cover;display:block}
+  .clip .th .ph{font-size:17px;line-height:1;filter:grayscale(1);opacity:.34}
+  .clip .n,.clip .t,.clip .d{padding-left:9px;padding-right:9px}
+  .clip .n{padding-top:6px}
+  #strip.nothumb .clip .th{display:none}
+  #strip.nothumb .clip .n{padding-top:7px}
 
   #toast{display:none;background:rgba(255,176,32,.12);border:1px solid var(--amber);color:var(--amber);border-radius:7px;padding:8px 12px;font-size:12.5px;margin-bottom:11px}
   kbd{font-family:var(--mono);font-size:11.5px;background:var(--key);border:1px solid var(--line2);border-bottom-width:2px;border-radius:4px;padding:1px 5px;color:var(--ink)}
@@ -292,6 +299,7 @@
     <h2 class="set">设置 SETUP <em>预览参数、电平表、快捷键</em></h2>
     <div class="row">
       <label class="row" style="gap:6px"><input type="checkbox" id="pvOn" checked> 预览画面</label>
+      <label class="row" style="gap:6px"><input type="checkbox" id="thumbOn" checked> 卡片缩略图</label>
       <span class="lab">帧率</span>
       <select id="pvFps">
         <option value="500">2 fps（最省）</option>
@@ -347,6 +355,7 @@ const $ = function (s) { return document.querySelector(s); };
 const CARD_W_DEF = 150;
 const SEG = 26;
 let clips = [];
+let thumbMap = Object.create(null);   /* src -> 缩略图（播放端抽好发过来） */
 let sfxList = [];
 let order = [];
 let idx = -1;
@@ -446,6 +455,47 @@ function scrollToCur() {
 const IMG_RE = /\.(jpg|jpeg|png|gif|webp|bmp|avif)$/i;
 function isImgClip(c) { return !!c && (c.kind === 'image' || IMG_RE.test(String(c.src || ''))); }
 function gridDur(c) { return isImgClip(c) ? '图片 ' + (c.dur || 5) + 's' : (c.dur || 0) + 's'; }
+/* 把缩略图塞进卡片的 .th 块；没有就显示占位符 */
+function fillThumb(el, c) {
+  const th = el.querySelector('.th');
+  if (!th || !c) return;
+  const t = thumbMap[c.src];
+  let img = th.querySelector('img');
+  if (t) {
+    if (img && img.getAttribute('src') === t) return;
+    if (!img) {
+      img = document.createElement('img');
+      img.alt = ''; img.draggable = false; img.loading = 'lazy';
+      th.insertBefore(img, th.firstChild);
+    }
+    img.src = t;
+    const ph = th.querySelector('.ph');
+    if (ph) ph.remove();
+    return;
+  }
+  if (img) img.remove();
+  if (!th.querySelector('.ph')) {
+    const ph = document.createElement('span');
+    ph.className = 'ph';
+    ph.textContent = isImgClip(c) ? '🖼' : '🎬';
+    th.appendChild(ph);
+  }
+}
+/* 播放端抽好一帧就发过来；只就地换图，不重建列表（不跳滚动） */
+function applyThumbs(m) {
+  if (m.all && typeof m.all === 'object') {
+    thumbMap = Object.create(null);
+    Object.keys(m.all).forEach(function (k) { thumbMap[k] = m.all[k]; });
+  }
+  if (m.add && typeof m.add === 'object') {
+    Object.keys(m.add).forEach(function (k) { thumbMap[k] = m.add[k]; });
+  }
+  const strip = $('#strip');
+  if (!strip) return;
+  Array.prototype.forEach.call(strip.children, function (el) {
+    if (el.__clip) fillThumb(el, el.__clip);
+  });
+}
 function renderGrid() {
   const sig = order.join(',') + '|' + idx + '|' + sel + '|' + cardW;
   if (sig === gridSig) return;
@@ -458,10 +508,13 @@ function renderGrid() {
     const d = document.createElement('div');
     d.className = 'clip' + (pos === idx ? ' cur' : '') + (pos === sel ? ' sel' : '');
     d.style.width = cardW + 'px';
-    d.innerHTML = '<div class="n"><span>' + String(pos + 1).padStart(2, '0') + '</span><span>' +
+    d.__clip = c;
+    d.innerHTML = '<div class="th"></div>' +
+      '<div class="n"><span>' + String(pos + 1).padStart(2, '0') + '</span><span>' +
       (pos === idx ? '▶ 正在' : '') + '</span></div>' +
       '<div class="t">' + c.label.replace(/^\d+ · /, '') + '</div>' +
       '<div class="d">' + gridDur(c) + '</div>';
+    fillThumb(d, c);
     d.onclick = function () {
       sel = pos; gridSig = ''; renderGrid();
       send({ k: 'cmd', action: 'goto', idx: pos, at: 0 });
@@ -558,6 +611,8 @@ function renderState() {
   if (document.activeElement !== $('#speed')) $('#speed').value = String(st.speed || 1);
   if (document.activeElement !== $('#imgHold')) $('#imgHold').value = String(st.imgHold || 5);
   if ($('#imgAuto').checked !== !!st.imgAuto) $('#imgAuto').checked = !!st.imgAuto;
+  if (document.activeElement !== $('#thumbOn')) $('#thumbOn').checked = st.thumbsOn !== false;
+  $('#strip').classList.toggle('nothumb', !$('#thumbOn').checked);
   renderGrid();
 }
 
@@ -609,6 +664,7 @@ bc.onmessage = function (e) {
   if (m.k === 'toast') { toast('播放端：' + m.text); return; }
   if (m.k === 'clips' && Array.isArray(m.list) && m.list.length) { applyIncomingClips(m.list); return; }
   if (m.k === 'prefs') { applyConsolePrefs(m.prefs); return; }
+  if (m.k === 'thumbs') { applyThumbs(m); return; }
   if (m.k === 'hello') { sendClips(); send({ k: 'hello' }); pushPreview(); if (meterWant) send({ k: 'cmd', action: 'meters', v: true }); return; }
 };
 
@@ -785,6 +841,7 @@ $('#imgHold').addEventListener('change', function () {
   cmd({ action: 'imgHold', v: secs });
 });
 $('#imgAuto').addEventListener('change', function () { cmd({ action: 'imgAuto', v: $('#imgAuto').checked }); });
+$('#thumbOn').addEventListener('change', function () { cmd({ action: 'thumbs', v: $('#thumbOn').checked }); });
 
 /* ---------- 音效板 ---------- */
 function renderSfx() {

@@ -1241,6 +1241,8 @@ async function importZip(file) {
   if (raw) { try { cfg = JSON.parse(ztd.decode(raw)); } catch (e) { cfg = null; } }
   const base = clips.length ? clips.slice() : ((pendingClips && pendingClips.length) ? pendingClips.slice() : FALLBACK_CLIPS);
   const baseK = base.map(function (c) { return keyOf(c.src); });
+  const stdByKey = Object.create(null);
+  FALLBACK_CLIPS.forEach(function (c) { const k = keyOf(c.src); if (!stdByKey[k]) stdByKey[k] = c; });
   releaseMap();
   const vids = [];
   map.forEach(function (data, path) {
@@ -1249,31 +1251,50 @@ async function importZip(file) {
     if (MEDIA_RE.test(name)) vids.push({ name: name.replace(/^\d{2,3}_/, ''), data: data, path: path });
   });
   if (!vids.length) throw new Error('包里没有视频 / 图片文件');
-  const seq = [];
-  if (cfg && Array.isArray(cfg.clips)) cfg.clips.forEach(function (c) { seq.push(baseName(c.file || c.path).replace(/^\d{2,3}_/, '')); });
-  if (!seq.length) seq = vids.slice().sort(function (a, b) { return a.path < b.path ? -1 : 1; }).map(function (x) { return x.name; });
-  const out = [], seen = Object.create(null);
+  /* 严格按包内 config.clips 的顺序重建；config 里没记的素材接在最后 */
+  const byKey = Object.create(null);
+  vids.forEach(function (x) { const k = keyOf(x.name); if (!byKey[k]) byKey[k] = x; });
+  const out = [], seen = Object.create(null), extra = [];
   let skip = 0;
-  seq.forEach(function (name) {
-    const k = keyOf(name);
-    const i = baseK.indexOf(k);
-    if (i < 0 || seen[i]) { skip++; return; }
-    seen[i] = 1;
-    out.push(base[i]);
-    for (let j = 0; j < vids.length; j++) {
-      if (keyOf(vids[j].name) !== k) continue;
-      if (!fileMap[k]) addFile(new File([vids[j].data], baseName(vids[j].name), { type: guessType(vids[j].name) }));
-      break;
-    }
-  });
-  /* 包内没在原表里出现的素材（比如新加的图片）按包内顺序追加成新片段 */
-  const extra = vids.filter(function (x) { return !fileMap[keyOf(x.name)]; })
-    .sort(function (a, b) { return a.path < b.path ? -1 : 1; })
-    .map(function (x) {
-      const isImg = isImgName(x.name);
-      addFile(new File([x.data], x.name, { type: guessType(x.name) }));
-      return { label: stripNum(x.name.replace(/\.[^.]+$/, '')), src: 'media/' + x.name, dur: isImg ? imgHold : null, kind: isImg ? 'image' : 'video' };
+  const pushClip = function (nm, label, dur, isImg, data) {
+    const k = keyOf(nm);
+    if (!k || seen[k]) return;
+    seen[k] = 1;
+    if (data && !fileMap[k]) addFile(new File([data], nm, { type: guessType(nm) }));
+    out.push({
+      label: stripNum(label || nm.replace(/\.[^.]+$/, '')),
+      src: 'media/' + nm,
+      dur: (typeof dur === 'number' && isFinite(dur)) ? dur : (isImg ? imgHold : null),
+      kind: isImg ? 'image' : 'video'
     });
+  };
+  if (cfg && Array.isArray(cfg.clips) && cfg.clips.length) {
+    cfg.clips.forEach(function (c) {
+      const nm = baseName(c.file || c.path || '');
+      const k = keyOf(nm);
+      if (!k || seen[k]) return;
+      const hit = byKey[k];
+      if (!hit) return;              /* 包内没这个文件，跳过 */
+      const isImg = /^image/i.test(String(c.type || '')) || isImgName(nm);
+      const std = stdByKey[k];
+      const dur = (typeof c.duration === 'number' && isFinite(c.duration)) ? c.duration
+        : (std && typeof std.dur === 'number' && isFinite(std.dur) ? std.dur : null);
+      pushClip(nm, c.label, dur, isImg, hit.data);
+    });
+  } else {
+    vids.slice().sort(function (a, b) { return a.path < b.path ? -1 : 1; }).forEach(function (x) {
+      pushClip(x.name, null, null, isImgName(x.name), x.data);
+    });
+  }
+  /* config 里没有、包里有的素材：接在片段表最后 */
+  vids.forEach(function (x) {
+    const k = keyOf(x.name);
+    if (!k || seen[k]) return;
+    const isImg = isImgName(x.name);
+    seen[k] = 1;
+    addFile(new File([x.data], x.name, { type: guessType(x.name) }));
+    extra.push({ label: stripNum(x.name.replace(/\.[^.]+$/, '')), src: 'media/' + x.name, dur: isImg ? imgHold : null, kind: isImg ? 'image' : 'video' });
+  });
   const head = out.length ? out : [];
   clips = head.map(function (c, i) { return { label: pad2(i + 1) + ' · ' + stripNum(c.label), src: c.src, dur: c.dur, kind: c.kind }; })
     .concat(extra.map(function (c, i) { return { label: pad2(head.length + i + 1) + ' · ' + c.label, src: c.src, dur: c.dur, kind: c.kind }; }));

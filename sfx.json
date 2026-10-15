@@ -1,5 +1,17 @@
 [
-  { "label": "音效 1", "src": "sfx/1.mp3", "dur": null },
-  { "label": "音效 2", "src": "sfx/2.mp3", "dur": null },
-  { "label": "音效 9月9日", "src": "sfx/9月9日.mp3", "dur": null }
+  {
+    "label": "音效 红军",
+    "src": "sfx/红军.mp3",
+    "dur": null
+  },
+  {
+    "label": "音效 机器人启动",
+    "src": "sfx/机器人启动音效_工业革命机械_3s.mp3",
+    "dur": null
+  },
+  {
+    "label": "音效 9月9日",
+    "src": "sfx/9月9日.mp3",
+    "dur": null
+  }
 ]

@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>双窗口舞台控制台 · Rehearsal Player</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎚️</text></svg>">
+<style>
+:root{
+  --panel:#f3f6fa; --control:#ffffff; --control-hover:#e2ebf6; --accent:#3e8edc;
+  --text:#2a303a; --text-dim:#767e8c; --border:#c2c8d4; --card:#ffffff;
+}
+*{box-sizing:border-box; margin:0; padding:0}
+html{height:100%}
+body{
+  font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+  background:var(--panel); color:var(--text);
+  padding:28px 20px 40px; -webkit-user-select:none; user-select:none;
+}
+.wrap{max-width:920px; margin:0 auto}
+h1{font-size:21px; font-weight:700; letter-spacing:.2px}
+.sub{font-size:13px; color:var(--text-dim); margin-top:6px}
+.row{display:flex; flex-wrap:wrap; gap:10px; margin-top:18px}
+.btn{
+  border:1px solid var(--border); background:var(--control); color:var(--text);
+  padding:10px 16px; border-radius:9px; cursor:pointer; font-size:14px; font-family:inherit;
+  transition:background .12s;
+}
+.btn:hover{background:var(--control-hover)}
+.btn.primary{background:var(--accent); border-color:var(--accent); color:#fff}
+.btn.primary:hover{background:#337cc2}
+.cards{display:flex; flex-wrap:wrap; gap:14px; margin-top:22px}
+.card{
+  flex:1 1 300px; background:var(--card); border:1px solid var(--border);
+  border-radius:12px; padding:16px 18px; box-shadow:0 1px 3px rgba(30,40,60,.05);
+}
+.card h2{font-size:15px; margin-bottom:8px}
+.card p{font-size:13px; line-height:1.75; color:#454d59}
+.card .k{color:var(--text-dim)}
+ol{margin:10px 0 0 20px; font-size:13px; line-height:1.9}
+li b{font-weight:700}
+.tip{
+  margin-top:16px; background:#eef4fc; border:1px solid #cfe0f3; border-radius:10px;
+  padding:12px 16px; font-size:13px; line-height:1.8; color:#2f4a66;
+}
+code{background:#e7ebf1; border-radius:4px; padding:1px 5px; font-size:12px}
+a.back{display:inline-block; margin-top:22px; font-size:13px; color:#1f5f9e; text-decoration:none}
+a.back:hover{text-decoration:underline}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>双窗口舞台控制台</h1>
+  <div class="sub">大屏只出画面，操作在控制台。两个窗口各自独立，可放在两台显示器上。</div>
+
+  <div class="row">
+    <button class="btn primary" id="both">一键打开两个窗口</button>
+    <button class="btn" id="p1">打开播放端（大屏）</button>
+    <button class="btn" id="p2">打开控制台（操作台）</button>
+  </div>
+
+  <div class="cards">
+    <div class="card">
+      <h2>播放端 · 大屏</h2>
+      <p>只负责出画面与声音：片段、音效、黑场、铺满、逐帧、AB 循环、电平表。
+      <span class="k">全屏后不显示任何提示文字。</span></p>
+    </div>
+    <div class="card">
+      <h2>控制台 · 操作台</h2>
+      <p>两行顶栏与状态灯、监视器预览、双 LED 电平表、走带面板（GO / 全停 / 大号时间码）、
+      音效板、CUE 片段条、设置与快捷键总表，深色浅色可切换。</p>
+    </div>
+  </div>
+
+  <div class="tip">
+    <b>第一次使用（每次开新窗口都要做一次）</b>
+    <ol>
+      <li>在<b>大屏窗口</b>点「选择视频文件夹」选本机的 <code>win7-video</code> 文件夹（也可直接把文件夹拖进窗口）；手里已经有排练包，就直接点「导入排练包（zip）」。</li>
+      <li>再在<b>大屏窗口点一下画面</b>：这一次点击同时解锁声音与全屏。</li>
+      <li>之后全部用<b>控制台</b>操作；按 <code>Esc</code> 退出全屏。</li>
+    </ol>
+    <b>排练包（zip）</b>：控制台顶栏「导出包」＝把<b>当前片段顺序、全部设置和视频（含音效）</b>打包下载；「导入包」＝让大屏窗口选一个 zip，原样恢复，播放顺序也一起回来。打包与导入都在本机完成。
+    <b>素材只在本机读取，不会上传到任何服务器</b>（视频体积大，不放进仓库）。
+  </div>
+
+  <a class="back" href="https://gejx-gejingxuan.github.io/rehearsal-player/" target="_blank" rel="noopener">← 白色单页网页版（另一个网站）</a>
+</div>
+
+<script>
+function w(url, name, w2, h2) {
+  window.open(url, name, 'width=' + w2 + ',height=' + h2 + ',menubar=no,toolbar=no');
+}
+addEventListener('click', function (e) {
+  const id = e.target && e.target.id;
+  if (id === 'both') { w('player.html', 'rp_player', 1280, 720); w('console.html', 'rp_console', 1400, 900); }
+  else if (id === 'p1') w('player.html', 'rp_player', 1280, 720);
+  else if (id === 'p2') w('console.html', 'rp_console', 1400, 900);
+});
+</script>
+</body>
+</html>

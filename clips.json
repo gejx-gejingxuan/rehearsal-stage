@@ -1,0 +1,122 @@
+[
+  {
+    "label": "01 · 1.2",
+    "src": "media/1.2.mp4",
+    "dur": 33.74
+  },
+  {
+    "label": "02 · 1.2(1)",
+    "src": "media/1.2(1).mp4",
+    "dur": 48.16
+  },
+  {
+    "label": "03 · 1",
+    "src": "media/1.mp4",
+    "dur": 159.41
+  },
+  {
+    "label": "04 · 2.2",
+    "src": "media/2.2.mp4",
+    "dur": 47.74
+  },
+  {
+    "label": "05 · 2.3",
+    "src": "media/2.3.mp4",
+    "dur": 32.14
+  },
+  {
+    "label": "06 · 2.3(1)",
+    "src": "media/2.3(1).mp4",
+    "dur": 38.73
+  },
+  {
+    "label": "07 · 2.4",
+    "src": "media/2.4.mp4",
+    "dur": 32.14
+  },
+  {
+    "label": "08 · 2",
+    "src": "media/2.mp4",
+    "dur": 95.5
+  },
+  {
+    "label": "09 · 2(1)",
+    "src": "media/2(1).mp4",
+    "dur": 106.09
+  },
+  {
+    "label": "10 · 3.3",
+    "src": "media/3.3.mp4",
+    "dur": 29.07
+  },
+  {
+    "label": "11 · 3",
+    "src": "media/3.mp4",
+    "dur": 117.33
+  },
+  {
+    "label": "12 · 背景视频",
+    "src": "media/背景视频.mp4",
+    "dur": 457.62
+  },
+  {
+    "label": "13 · 兵马俑_1",
+    "src": "media/兵马俑_1.mp4",
+    "dur": 28.03
+  },
+  {
+    "label": "14 · 兵马俑_2",
+    "src": "media/兵马俑_2.mp4",
+    "dur": 28.03
+  },
+  {
+    "label": "15 · 兵马俑_B1",
+    "src": "media/兵马俑_B1.mp4",
+    "dur": 27.15
+  },
+  {
+    "label": "16 · 兵马俑_B2",
+    "src": "media/兵马俑_B2.mp4",
+    "dur": 25.19
+  },
+  {
+    "label": "17 · 开国大典",
+    "src": "media/开国大典.mp4",
+    "dur": 12.86
+  },
+  {
+    "label": "18 · 开头",
+    "src": "media/开头.mp4",
+    "dur": 3.69
+  },
+  {
+    "label": "19 · 雪山草地",
+    "src": "media/雪山草地.mp4",
+    "dur": 285.52
+  },
+  {
+    "label": "20 · bmy1",
+    "src": "media/bmy1.mp4",
+    "dur": 27.47
+  },
+  {
+    "label": "21 · end1",
+    "src": "media/end1.mp4",
+    "dur": 30.56
+  },
+  {
+    "label": "22 · end2",
+    "src": "media/end2.mp4",
+    "dur": 14.63
+  },
+  {
+    "label": "23 · end2(1)",
+    "src": "media/end2(1).mp4",
+    "dur": 15.33
+  },
+  {
+    "label": "24 · ldz",
+    "src": "media/ldz.mp4",
+    "dur": 28.03
+  }
+]

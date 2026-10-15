@@ -1,0 +1,882 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>控制台 · 小屏</title>
+<style>
+  *{box-sizing:border-box}
+  :root{
+    --bg:#0c0e12; --panel:#151920; --panel2:#1b2029; --sunk:#090b0e; --key:#222831;
+    --line:#272d37; --line2:#333b47;
+    --ink:#e7eaef; --ink2:#98a2ae; --ink3:#69717c;
+    --amber:#ffb020; --green:#2fe06d; --red:#ff4b4b; --cyan:#3ad0f0; --blue:#5b8dff;
+    --card-w:150px; --mono:'Consolas','Cascadia Mono',ui-monospace,monospace;
+  }
+  html[data-theme="light"]{
+    --bg:#f5f6f8; --panel:#fff; --panel2:#f8f9fb; --sunk:#eef1f4; --key:#fff;
+    --line:#e3e6ea; --line2:#dadce0;
+    --ink:#202124; --ink2:#5f6368; --ink3:#80868b;
+  }
+  html,body{margin:0}
+  body{background:var(--bg);color:var(--ink);font:14px/1.5 'Microsoft YaHei',system-ui,sans-serif}
+  .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+  /* ---------- 顶栏 ---------- */
+  header{position:sticky;top:0;z-index:30;background:linear-gradient(180deg,var(--panel2),var(--panel));border-bottom:1px solid var(--line);padding:8px 14px 9px;display:flex;flex-direction:column;gap:7px}
+  .hrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .brand{display:flex;align-items:baseline;gap:8px}
+  .brand b{font-size:14px;letter-spacing:2px;font-weight:600}
+  .brand i{font-style:normal;font-size:11px;color:var(--ink3);letter-spacing:1px}
+  .leds{display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding:4px 10px;background:var(--sunk);border:1px solid var(--line);border-radius:8px}
+  .led{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--ink3);letter-spacing:.5px}
+  .led u{display:block;width:8px;height:8px;border-radius:50%;background:#2a3038;border:1px solid #000;text-decoration:none}
+  .led.on u{background:var(--green);box-shadow:0 0 7px var(--green)}
+  .led.warn u{background:var(--amber);box-shadow:0 0 7px var(--amber)}
+  .led.bad u{background:var(--red);box-shadow:0 0 7px var(--red)}
+  .led.on,.led.warn,.led.bad{color:var(--ink)}
+  .readout{background:var(--sunk);border:1px solid var(--line);border-radius:8px;padding:4px 10px;font-size:12px;color:var(--ink2);display:flex;align-items:center;gap:8px}
+  .readout b{color:var(--amber);font-weight:600;font-family:var(--mono)}
+  #curTag{color:var(--ink)}
+  #modeTag{color:var(--amber)}
+  #fpsTag{color:var(--cyan)}
+  #fpsTag.warn{color:var(--red)}
+  .spacer{flex:1}
+
+  main{padding:12px 14px 40px;max-width:1500px;margin:0 auto}
+  .desk{display:grid;grid-template-columns:minmax(340px,1fr) minmax(430px,1.12fr);gap:12px;align-items:start}
+  @media (max-width:1040px){.desk{grid-template-columns:1fr}}
+  .col{display:flex;flex-direction:column;gap:12px}
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:11px 12px 12px}
+  .card>h2{display:flex;align-items:center;gap:8px;font-size:11px;font-weight:600;letter-spacing:1.5px;color:var(--ink2);margin:0 0 10px;text-transform:uppercase}
+  .card>h2::before{content:'';width:3px;height:12px;background:var(--blue);border-radius:2px;flex:0 0 auto}
+  .card>h2 em{font-style:normal;text-transform:none;letter-spacing:0;font-weight:400;color:var(--ink3);font-size:11.5px;min-width:0}
+  .card>h2.sfx::before{background:var(--amber)}
+  .card>h2.cue::before{background:var(--green)}
+  .card>h2.set::before{background:var(--ink3)}
+
+  button{font:inherit;font-size:13px;padding:6px 11px;border:1px solid var(--line2);border-radius:7px;background:var(--key);color:var(--ink);cursor:pointer;white-space:nowrap;transition:.12s}
+  button:hover{border-color:var(--blue);background:var(--panel2)}
+  button:active{transform:translateY(1px)}
+  button.on{border-color:var(--amber);color:var(--amber);background:rgba(255,176,32,.12);font-weight:600}
+  button.warnon{border-color:var(--amber);color:#0c0e12;background:var(--amber);font-weight:700}
+  button.sfx{padding:9px 15px;font-size:13.5px}
+  button.go{min-width:104px;font-size:15px;font-weight:700;color:#04120a;background:var(--green);border-color:#1ea855;letter-spacing:1px}
+  button.go:hover{background:#43f07f;border-color:#43f07f}
+  button.panic{color:#fff;background:#7a1616;border-color:#a32222;font-weight:700;letter-spacing:1px}
+  button.panic:hover{background:var(--red);border-color:var(--red)}
+  button.key{min-width:40px;text-align:center}
+  select{font:inherit;font-size:13px;padding:5px 7px;border:1px solid var(--line2);border-radius:7px;background:var(--key);color:var(--ink)}
+  input[type=range]{accent-color:var(--amber);height:20px}
+  input[type=checkbox]{accent-color:var(--amber)}
+  .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12.5px;color:var(--ink2)}
+  .row+.row{margin-top:9px}
+  .lab{min-width:58px;font-size:11.5px;letter-spacing:.5px;color:var(--ink3)}
+  .sep{width:1px;height:20px;background:var(--line);margin:0 2px}
+  .hintline{font-size:11.5px;color:var(--ink3);margin-top:9px;line-height:1.65}
+  .pill{font-size:11px;border:1px solid var(--line2);border-radius:20px;padding:2px 9px;color:var(--ink3)}
+
+  /* ---------- 监视器 ---------- */
+  #pvWrap{position:relative;aspect-ratio:16/9;background:#000;border:1px solid var(--line2);border-radius:8px;overflow:hidden;box-shadow:inset 0 0 40px rgba(0,0,0,.6)}
+  #pv{width:100%;height:100%;display:block}
+  #pvEmpty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--ink3);font-size:12.5px;text-align:center;padding:10px}
+  #pvMeta{position:absolute;left:8px;bottom:6px;color:var(--ink);background:rgba(0,0,0,.6);padding:2px 8px;border-radius:5px;font-size:11px;font-family:var(--mono)}
+  #pvBadge{position:absolute;right:8px;top:6px;color:var(--amber);background:rgba(0,0,0,.6);padding:2px 8px;border-radius:5px;font-size:11px;font-family:var(--mono)}
+
+  /* ---------- 电平表 ---------- */
+  .meter{display:flex;gap:1px;height:15px;width:150px;flex:0 0 150px;background:var(--sunk);border:1px solid var(--line);border-radius:4px;padding:2px}
+  .meter i{flex:1;background:#20252d;border-radius:1px}
+  html[data-theme="light"] .meter i{background:#e2e6ec}
+  .meter i.on{background:var(--green)}
+  .meter i.hi.on{background:var(--amber)}
+  .meter i.pk.on{background:var(--red)}
+  .meter.fader i.on{background:#3f6f52}
+  .meter.fader i.hi.on{background:#6b5a2a}
+  .meter.fader i.pk.on{background:#6d3030}
+  .chan{display:flex;align-items:center;gap:9px}
+  .chan .nm{width:46px;font-size:11px;color:var(--ink3);letter-spacing:.5px}
+  .chan .db{flex:1;text-align:right;font-family:var(--mono);font-size:11.5px;color:var(--ink2)}
+  .peakmark{color:var(--red)}
+
+  /* ---------- 时间码 / 走带 ---------- */
+  .tc{display:flex;align-items:baseline;gap:8px}
+  .tc b{font-family:var(--mono);font-size:30px;letter-spacing:1px;color:var(--amber);text-shadow:0 0 14px rgba(255,176,32,.25);line-height:1.1}
+  .tc span{font-family:var(--mono);font-size:13px;color:var(--ink3)}
+  .rulerWrap{position:relative;height:22px;margin-top:6px}
+  .ruler{position:absolute;inset:0;border-radius:4px;background:
+    repeating-linear-gradient(90deg,var(--line2) 0 1px,transparent 1px 28px);
+    border:1px solid var(--line);background-color:var(--sunk)}
+  #seekFill{position:absolute;left:0;top:0;bottom:0;width:0;background:linear-gradient(90deg,rgba(255,176,32,.18),rgba(255,176,32,.42));border-right:2px solid var(--amber);border-radius:4px 0 0 4px;pointer-events:none}
+  #seek{position:absolute;inset:0;width:100%;margin:0;height:100%;background:transparent;appearance:none;-webkit-appearance:none}
+  #seek::-webkit-slider-thumb{-webkit-appearance:none;width:10px;height:20px;border-radius:3px;background:var(--amber);border:1px solid #7a5510;cursor:grab;box-shadow:0 0 8px rgba(255,176,32,.5)}
+  #seek::-webkit-slider-runnable-track{height:100%;background:transparent}
+
+  /* ---------- 片段 cue 列表 ---------- */
+  #strip{display:flex;flex-wrap:nowrap;gap:7px;overflow-x:auto;overflow-y:hidden;padding:4px 2px 10px;scroll-behavior:smooth}
+  .clip{flex:0 0 auto;width:var(--card-w);background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--line2);border-radius:6px;padding:7px 9px;cursor:pointer;transition:.12s;overflow:hidden}
+  .clip:hover{border-color:var(--blue);border-left-color:var(--blue)}
+  .clip.cur{border-color:var(--amber);border-left-color:var(--amber);background:rgba(255,176,32,.10);box-shadow:0 0 0 1px rgba(255,176,32,.35) inset}
+  .clip.sel{border-color:var(--cyan);border-left-color:var(--cyan)}
+  .clip .n{font-family:var(--mono);font-size:11px;color:var(--ink3);display:flex;justify-content:space-between;gap:6px}
+  .clip.cur .n{color:var(--amber)}
+  .clip .t{font-size:13px;margin:2px 0 3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
+  .clip .d{font-family:var(--mono);font-size:11px;color:var(--ink3)}
+
+  #toast{display:none;background:rgba(255,176,32,.12);border:1px solid var(--amber);color:var(--amber);border-radius:7px;padding:8px 12px;font-size:12.5px;margin-bottom:11px}
+  kbd{font-family:var(--mono);font-size:11.5px;background:var(--key);border:1px solid var(--line2);border-bottom-width:2px;border-radius:4px;padding:1px 5px;color:var(--ink)}
+  .kv{display:grid;grid-template-columns:auto 1fr;gap:5px 12px;font-size:12px;color:var(--ink2)}
+  .kv b{font-family:var(--mono);color:var(--amber);font-weight:600;white-space:nowrap}
+  .gridfix{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:6px 16px}
+</style>
+</head>
+<body>
+<header>
+  <div class="hrow">
+    <div class="brand"><b>排练播放器</b><i>舞台控制台 · STAGE CONTROL</i></div>
+    <div class="readout">CUE <b id="curTag">未开始</b></div>
+    <div class="readout" id="modeTag" style="display:none">--</div>
+    <div class="readout"><b id="fpsTag">解码 --</b></div>
+    <div class="spacer"></div>
+    <div class="readout mono" id="clock">--:--:--</div>
+    <button id="bImport" title="导入排练包（zip）：恢复片段顺序与设置">导入包</button>
+    <button id="bExport" title="导出排练包（zip）：片段 + 顺序 + 设置，全部在本机打包">导出包</button>
+    <button id="bTheme" title="深色 / 浅色">◐ 主题</button>
+  </div>
+  <div class="hrow">
+    <div class="leds">
+      <span class="led" id="ledConn"><u></u>连接</span>
+      <span class="led" id="ledLock"><u></u>解锁</span>
+      <span class="led" id="ledFs"><u></u>全屏</span>
+      <span class="led" id="ledBlack"><u></u>黑场</span>
+      <span class="led" id="ledQuiet"><u></u>无提示</span>
+      <span class="led" id="ledMute"><u></u>静音</span>
+      <span class="led" id="ledChain"><u></u>连播</span>
+      <span class="led" id="ledLoop"><u></u>循环</span>
+      <span class="led" id="ledAb"><u></u>AB</span>
+      <span class="led" id="ledDuck"><u></u>闪避</span>
+    </div>
+  </div>
+</header>
+
+<main>
+  <div id="toast"></div>
+
+  <div class="desk">
+    <div class="col">
+      <div class="card">
+        <h2>监视器 MONITOR <em>播放端推来的低帧率预览，控制台不解码视频</em></h2>
+        <div id="pvWrap">
+          <canvas id="pv" width="320" height="180"></canvas>
+          <div id="pvEmpty">等待播放端画面…<br>（控制台不加载视频，只接收低帧率预览）</div>
+          <div id="pvMeta" style="display:none"></div>
+          <div id="pvBadge" style="display:none"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>电平 LEVELS <em>主视频 / 音效</em></h2>
+        <div class="chan">
+          <span class="nm">MAIN</span>
+          <div class="meter" id="meterV"></div>
+          <span class="db" id="dbV">-∞</span>
+        </div>
+        <div class="row" style="margin-top:6px">
+          <input type="range" id="vol" min="0" max="100" value="99" style="flex:1;min-width:110px">
+          <span class="mono" id="volLbl" style="width:40px;text-align:right;color:var(--ink2)">99%</span>
+          <button id="bMute">静音主视频</button>
+        </div>
+        <div class="chan" style="margin-top:11px">
+          <span class="nm">SFX</span>
+          <div class="meter" id="meterS"></div>
+          <span class="db" id="dbS">-∞</span>
+        </div>
+        <div class="row" style="margin-top:6px">
+          <input type="range" id="sfxVol" min="0" max="100" value="100" style="flex:1;min-width:110px">
+          <span class="mono" id="sfxVolLbl" style="width:40px;text-align:right;color:var(--ink2)">100%</span>
+          <button id="bSfxStop">■ 停止音效</button>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <label class="row" style="gap:6px"><input type="checkbox" id="duck"> 触发音效时自动静音主视频（音效结束后自动恢复）</label>
+          <span class="pill" id="meterState">电平表：推子</span>
+        </div>
+        <div class="hintline">电平表默认显示推子位置；在「设置」里打开真实电平表后，显示播放端实测峰值（需要在大屏窗口先点过一次画面）。</div>
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="card">
+        <h2>走带 TRANSPORT</h2>
+        <div class="tc"><b id="timeLbl">00:00 / 00:00</b><span id="sfxNow" style="display:none"></span></div>
+        <div class="rulerWrap">
+          <div class="ruler"></div>
+          <div id="seekFill"></div>
+          <input type="range" id="seek" min="0" max="1000" value="0">
+        </div>
+        <div class="row" style="margin-top:10px">
+          <button class="go" id="bPlay">▶ 播放</button>
+          <button id="bPrev" title="上一个">⏮</button>
+          <button id="bNext" title="下一个">⏭</button>
+          <button id="bRestart" title="从头重播">⟲</button>
+          <span class="sep"></span>
+          <button class="key" id="frameBack" title="后退一帧">|◀</button>
+          <button class="key" id="frameFwd" title="前进一帧">▶|</button>
+          <span class="sep"></span>
+          <button data-seek="-10">-10s</button>
+          <button data-seek="-5">-5s</button>
+          <button data-seek="5">+5s</button>
+          <button data-seek="10">+10s</button>
+          <span class="sep"></span>
+          <span class="lab">倍速</span>
+          <select id="speed">
+            <option value="0.5">0.5×</option>
+            <option value="0.75">0.75×</option>
+            <option value="1" selected>1×</option>
+            <option value="1.25">1.25×</option>
+            <option value="1.5">1.5×</option>
+            <option value="2">2×</option>
+            <option value="3">3×</option>
+          </select>
+          <span class="sep"></span>
+          <button class="panic" id="bPanic" title="暂停主视频并停止全部音效">■ 全停</button>
+        </div>
+        <div class="row" style="margin-top:9px">
+          <span class="lab">模式</span>
+          <button id="bChain">连播</button>
+          <button id="bLoop">循环</button>
+          <button id="bA">设 A</button>
+          <button id="bB">设 B</button>
+          <button id="bAbClear">清 AB</button>
+          <span class="mono" id="abLbl" style="font-size:11.5px;color:var(--ink3)">AB 未设</span>
+        </div>
+        <div class="row" style="margin-top:9px">
+          <span class="lab">画面</span>
+          <button id="bFull">⛶ 播放端全屏</button>
+          <button id="bQuiet">无提示</button>
+          <button id="bBlack">黑场</button>
+          <button id="bFit">铺满画面</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2 class="sfx">音效板 SFX <em>点了立即在大屏响；4 条通道可同时响，再点一次＝停该条</em></h2>
+        <div class="row" id="sfxRow"></div>
+        <div class="row" id="sfxLoopRow" style="margin-top:9px"><span class="lab">循环</span></div>
+        <div class="hintline">勾选「循环」后该音效持续循环，再点一次停止。键盘 <kbd>X</kbd> 随时全停。</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:12px">
+    <h2 class="cue">片段 CUE STACK <em>横向排列可滚动；点一下＝切到该片段，选中后可用上移/下移调顺序</em></h2>
+    <div id="strip"></div>
+    <div class="row">
+      <button id="bUp">↑ 上移</button>
+      <button id="bDown">↓ 下移</button>
+      <button id="bReset">恢复默认顺序</button>
+      <span class="sep"></span>
+      <span class="lab">卡片大小</span>
+      <input type="range" id="cardW" min="100" max="260" value="150" style="width:150px">
+      <span class="mono" id="cardWLbl" style="font-size:11.5px;color:var(--ink2);width:46px">150px</span>
+      <button id="bCardWReset">还原</button>
+      <span class="pill" id="cntTag">0 个</span>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:12px">
+    <h2 class="set">设置 SETUP <em>预览参数、电平表、快捷键</em></h2>
+    <div class="row">
+      <label class="row" style="gap:6px"><input type="checkbox" id="pvOn" checked> 预览画面</label>
+      <span class="lab">帧率</span>
+      <select id="pvFps">
+        <option value="500">2 fps（最省）</option>
+        <option value="220" selected>5 fps（默认）</option>
+        <option value="120">8 fps</option>
+      </select>
+      <span class="lab">尺寸</span>
+      <select id="pvW">
+        <option value="240">240p（最省）</option>
+        <option value="320" selected>320p（默认）</option>
+        <option value="480">480p（清晰）</option>
+      </select>
+      <span class="pill" id="pvFpsTag">预览 --</span>
+      <span class="sep"></span>
+      <label class="row" style="gap:6px"><input type="checkbox" id="meterOn"> 真实电平表</label>
+      <span class="pill">不改播放路径，仅旁路取样</span>
+    </div>
+    <div class="hintline">老电脑卡就把预览帧率/尺寸调低。实时电平表会额外占用一点 CPU；若提示不可用会自动回退成推子读数。</div>
+    <div class="row" style="margin-top:12px"><b style="font-size:12px;letter-spacing:1px;color:var(--ink2)">快捷键（控制台窗口内生效）</b></div>
+    <div class="kv gridfix" style="margin-top:7px">
+      <b>空格</b><span>播放 / 暂停</span>
+      <b>← →</b><span>快退 / 快进 5 秒</span>
+      <b>↑ ↓</b><span>主视频音量 ±5%</span>
+      <b>, .</b><span>后退 / 前进一帧</span>
+      <b>1 2 3 4</b><span>回到前面第 1~4 个片段</span>
+      <b>5</b><span>重播当前片段</span>
+      <b>6 7 8 9 0</b><span>跳到后面第 1~5 个片段</span>
+      <b>M</b><span>静音 / 取消静音主视频</span>
+      <b>X</b><span>停止全部音效</span>
+      <b>F</b><span>播放端全屏 / 退出全屏</span>
+      <b>B</b><span>大屏黑场 / 恢复画面</span>
+      <b>T</b><span>画面铺满 / 原始比例</span>
+      <b>L</b><span>循环开关</span>
+      <b>C</b><span>连播开关</span>
+    </div>
+  </div>
+</main>
+
+<script>
+const CH = 'rp_sync';
+const ME = 'console-' + Math.random().toString(36).slice(2, 7);
+const bc = new BroadcastChannel(CH);
+const $ = function (s) { return document.querySelector(s); };
+
+const CARD_W_DEF = 150;
+const SEG = 26;
+let clips = [];
+let sfxList = [];
+let order = [];
+let idx = -1;
+let st = null;
+let dragging = false;
+let lastState = 0, lastFrame = 0;
+let sel = -1, gridSig = '', toastTimer = null, cardW = CARD_W_DEF;
+let pvFrames = 0, pvT0 = 0, pvFps = 0;
+let syncedOnce = false;
+let lastMeters = null;
+let peakV = 0, peakS = 0, dispV = 0, dispS = 0;
+let meterWant = false;
+const sfxLoopPref = {};
+
+function send(m) { m.from = ME; bc.postMessage(m); }
+window.send = send;
+function fmt(t) {
+  if (!isFinite(t)) t = 0;
+  return String(Math.floor(t / 60)).padStart(2, '0') + ':' + String(Math.floor(t % 60)).padStart(2, '0');
+}
+function dbStr(x) {
+  if (!x || x <= 0.0005) return '-∞';
+  return (20 * Math.log10(x)).toFixed(1) + ' dB';
+}
+function list() { return order.map(function (i) { return clips[i]; }); }
+function sendClips() { send({ k: 'clips', list: list() }); }
+function toast(text) {
+  const el = $('#toast');
+  el.textContent = text;
+  el.style.display = 'block';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function () { el.style.display = 'none'; }, 5200);
+}
+function led(sel, mode) {
+  const e = $(sel);
+  if (!e) return;
+  e.className = 'led' + (mode && mode !== 'off' ? ' ' + mode : '');
+}
+
+/* ---------- 电平表 ---------- */
+function buildMeters() {
+  [['#meterV'], ['#meterS']].forEach(function (p) {
+    const box = $(p[0]);
+    box.innerHTML = '';
+    for (let i = 0; i < SEG; i++) {
+      const seg = document.createElement('i');
+      if (i >= Math.round(SEG * 0.85)) seg.className = 'pk';
+      else if (i >= Math.round(SEG * 0.65)) seg.className = 'hi';
+      box.appendChild(seg);
+    }
+  });
+}
+function paintMeter(sel, val, peak, faderMode) {
+  const box = $(sel);
+  if (!box) return;
+  const segs = box.children;
+  const lit = Math.round(Math.max(0, Math.min(1, val)) * SEG);
+  const pkSeg = peak > 0 ? Math.min(SEG - 1, Math.max(0, Math.round(peak * SEG) - 1)) : -1;
+  for (let i = 0; i < SEG; i++) {
+    segs[i].classList.toggle('on', i < lit);
+    segs[i].style.outline = (i === pkSeg) ? '1px solid var(--red)' : 'none';
+  }
+  box.classList.toggle('fader', !!faderMode);
+}
+function meterTick() {
+  const live = meterWant && st && st.metersOn;
+  const m = (live && lastMeters && Date.now() - lastMeters.t < 1500) ? lastMeters : null;
+  const v = m ? m.v * (st.muted ? 0 : (st.vol == null ? 1 : st.vol)) : (st ? (st.muted ? 0 : st.vol || 0) : 0);
+  const s = m ? m.s * (st ? (st.sfxVol == null ? 1 : st.sfxVol) : 1) : (st ? st.sfxVol || 0 : 0);
+  /* 快起慢落：瞬时上升、缓慢回落，接近真实表弹道 */
+  dispV = Math.max(v, dispV * 0.82);
+  dispS = Math.max(s, dispS * 0.82);
+  peakV = Math.max(dispV, peakV - 0.010);
+  peakS = Math.max(dispS, peakS - 0.010);
+  paintMeter('#meterV', dispV, m ? peakV : 0, !m);
+  paintMeter('#meterS', dispS, m ? peakS : 0, !m);
+  $('#dbV').textContent = dbStr(dispV);
+  $('#dbS').textContent = dbStr(dispS);
+}
+
+/* ---------- 片段条 ---------- */
+function applyCardW(w) {
+  cardW = w;
+  document.documentElement.style.setProperty('--card-w', w + 'px');
+  $('#strip').style.setProperty('--card-w', w + 'px');
+  document.querySelectorAll('#strip .clip').forEach(function (c) { c.style.width = w + 'px'; });
+  $('#cardWLbl').textContent = w + 'px';
+  try { localStorage.setItem('rp_sample_cardw', String(w)); } catch (e) {}
+}
+function scrollToCur() {
+  const cur = document.querySelector('#strip .clip.cur');
+  const strip = $('#strip');
+  if (!cur || !strip) return;
+  const left = cur.offsetLeft - strip.clientWidth / 2 + cur.offsetWidth / 2;
+  strip.scrollLeft = Math.max(0, left);
+}
+function renderGrid() {
+  const sig = order.join(',') + '|' + idx + '|' + sel + '|' + cardW;
+  if (sig === gridSig) return;
+  gridSig = sig;
+  const strip = $('#strip');
+  strip.innerHTML = '';
+  order.forEach(function (ci, pos) {
+    const c = clips[ci];
+    if (!c) return;
+    const d = document.createElement('div');
+    d.className = 'clip' + (pos === idx ? ' cur' : '') + (pos === sel ? ' sel' : '');
+    d.style.width = cardW + 'px';
+    d.innerHTML = '<div class="n"><span>' + String(pos + 1).padStart(2, '0') + '</span><span>' +
+      (pos === idx ? '▶ 正在' : '') + '</span></div>' +
+      '<div class="t">' + c.label.replace(/^\d+ · /, '') + '</div>' +
+      '<div class="d">' + (c.dur || 0) + 's</div>';
+    d.onclick = function () {
+      sel = pos; gridSig = ''; renderGrid();
+      send({ k: 'cmd', action: 'goto', idx: pos, at: 0 });
+    };
+    strip.appendChild(d);
+  });
+  $('#cntTag').textContent = clips.length + ' 个';
+  scrollToCur();
+}
+
+function renderState() {
+  if (!clips.length) return;
+  const ok = st && Date.now() - lastState < 4000;
+  led('#ledConn', ok ? 'on' : 'bad');
+  if (!st) return;
+
+  idx = st.idx;
+  const c = clips[idx];
+  $('#curTag').textContent = c ? ((idx + 1) + '/' + clips.length + ' · ' + c.label.replace(/^\d+ · /, '')) : '未开始';
+  $('#bPlay').textContent = st.playing ? '⏸ 暂停' : '▶ 播放';
+  $('#timeLbl').textContent = fmt(st.time) + ' / ' + fmt(st.dur || (c ? c.dur : 0));
+
+  led('#ledLock', st.unlocked === false ? 'warn' : 'on');
+  led('#ledFs', st.fs ? 'on' : 'off');
+  led('#ledBlack', st.black ? 'on' : 'off');
+  led('#ledQuiet', st.quiet ? 'on' : 'off');
+  led('#ledMute', st.muted ? 'bad' : 'off');
+  led('#ledChain', st.chain ? 'on' : 'off');
+  led('#ledLoop', st.loop ? 'on' : 'off');
+  led('#ledAb', st.ab && st.ab.on ? 'on' : 'off');
+  led('#ledDuck', st.duck ? 'on' : 'off');
+
+  const modes = [];
+  if (st.chain) modes.push('连播');
+  if (st.loop) modes.push('循环');
+  if (st.ab && st.ab.on) modes.push('AB');
+  if (st.quiet) modes.push('无提示');
+  if (st.fs) modes.push('全屏');
+  if (st.black) modes.push('黑场');
+  if (st.fit === 'cover') modes.push('铺满');
+  if (st.muted) modes.push('主视频静音');
+  $('#modeTag').style.display = modes.length ? '' : 'none';
+  $('#modeTag').textContent = modes.join(' · ');
+
+  $('#fpsTag').textContent = st.fps ? ('解码 ' + st.fps + ' fps') : '解码 --';
+  $('#fpsTag').className = (st.fps && st.fps < 20) ? 'warn' : '';
+
+  $('#bChain').className = st.chain ? 'on' : '';
+  $('#bLoop').className = st.loop ? 'on' : '';
+  $('#bQuiet').className = st.quiet ? 'on' : '';
+  $('#bBlack').className = st.black ? 'warnon' : '';
+  $('#bBlack').textContent = st.black ? '恢复画面' : '黑场';
+  $('#bFit').className = st.fit === 'cover' ? 'on' : '';
+  $('#bFit').textContent = st.fit === 'cover' ? '铺满画面（开）' : '铺满画面';
+  $('#bFull').textContent = st.fs ? '⛶ 退出播放端全屏' : '⛶ 播放端全屏';
+  $('#bMute').className = st.muted ? 'on' : '';
+  $('#bMute').textContent = st.muted ? '主视频已静音' : '静音主视频';
+  if (st.ab && st.ab.a != null) {
+    $('#abLbl').textContent = 'A ' + st.ab.a.toFixed(1) + 's' + (st.ab.b != null ? ' / B ' + st.ab.b.toFixed(1) + 's' : ' / B 未设') + (st.ab.on ? '' : '（未启用）');
+  } else {
+    $('#abLbl').textContent = 'AB 未设';
+  }
+
+  if (!dragging) {
+    const pct = st.dur ? Math.round(st.time / st.dur * 1000) : 0;
+    $('#seek').value = Math.min(1000, Math.max(0, pct));
+    $('#seekFill').style.width = (Math.min(1000, Math.max(0, pct)) / 10) + '%';
+  }
+  const pv = Math.round((st.vol || 0) * 100);
+  if (Math.abs(+$('#vol').value - pv) > 1) $('#vol').value = pv;
+  $('#volLbl').textContent = pv + '%';
+  const sv = Math.round((st.sfxVol == null ? 1 : st.sfxVol) * 100);
+  if (Math.abs(+$('#sfxVol').value - sv) > 1) $('#sfxVol').value = sv;
+  $('#sfxVolLbl').textContent = sv + '%';
+
+  const live = meterWant && st.metersOn;
+  $('#meterState').textContent = live ? '电平表：实时峰值' : (meterWant ? '电平表：不可用，已回退推子' : '电平表：推子');
+  if (!meterWant && $('#meterOn').checked) { $('#meterOn').checked = false; }
+
+  const active = (st.sfxActive && st.sfxActive.length ? st.sfxActive : (st.sfxPlaying && st.sfxLabel ? [st.sfxLabel] : []));
+  $('#sfxNow').style.display = active.length ? '' : 'none';
+  if (active.length) $('#sfxNow').textContent = '播放中 · ♪ ' + active.join(' + ');
+  $('#bSfxStop').className = active.length ? 'on' : '';
+  document.querySelectorAll('#sfxRow button').forEach(function (b) {
+    const on = active.indexOf(b.getAttribute('data-label')) >= 0;
+    b.className = 'sfx' + (on ? ' on' : '');
+  });
+  document.querySelectorAll('#sfxLoopRow input[type=checkbox]').forEach(function (cb) {
+    const lb = cb.getAttribute('data-label');
+    const on = !!(st.sfxLoops && st.sfxLoops.indexOf(lb) >= 0) || !!sfxLoopPref[lb];
+    if (cb.checked !== on) cb.checked = on;
+  });
+  $('#duck').checked = !!st.duck;
+  if (document.activeElement !== $('#speed')) $('#speed').value = String(st.speed || 1);
+  renderGrid();
+}
+
+function setFrameInfo() {
+  const ok = Date.now() - lastFrame < 3500;
+  $('#pvMeta').style.display = ok ? '' : 'none';
+  if (ok) $('#pvMeta').textContent = $('#pv').width + '×' + $('#pv').height + ' · 预览';
+  $('#pvEmpty').style.display = ok ? 'none' : '';
+  $('#pvBadge').style.display = ok ? '' : 'none';
+  if (ok) {
+    const now = Date.now();
+    if (!pvT0) { pvT0 = now; pvFrames = 0; }
+    if (now - pvT0 > 1500) {
+      pvFps = Math.round(pvFrames / ((now - pvT0) / 1000));
+      pvT0 = now; pvFrames = 0;
+    }
+    $('#pvBadge').textContent = '预览 ' + pvFps + ' fps';
+    $('#pvFpsTag').textContent = '预览 ' + pvFps + ' fps';
+  }
+}
+
+/* ---------- 接收 ---------- */
+bc.onmessage = function (e) {
+  const m = e.data;
+  if (!m || m.from === ME) return;
+
+  if (m.k === 'state') {
+    lastState = Date.now();
+    st = m;
+    if (meterWant && !m.metersOn) meterWant = false;
+    renderState();
+    if (clips.length && m.count !== clips.length) sendClips();
+    if (!syncedOnce && clips.length) { syncedOnce = true; syncSettings(); }
+    return;
+  }
+  if (m.k === 'meters') { lastMeters = { v: +m.v || 0, s: +m.s || 0, t: Date.now() }; return; }
+  if (m.k === 'frame') {
+    lastFrame = Date.now();
+    const b = new Blob([m.buf], { type: 'image/jpeg' });
+    createImageBitmap(b).then(function (bmp) {
+      const cvs = $('#pv');
+      if (cvs.width !== m.w || cvs.height !== m.h) { cvs.width = m.w; cvs.height = m.h; }
+      cvs.getContext('2d').drawImage(bmp, 0, 0);
+      pvFrames++;
+      setFrameInfo();
+    }).catch(function () {});
+    return;
+  }
+  if (m.k === 'toast') { toast('播放端：' + m.text); return; }
+  if (m.k === 'clips' && Array.isArray(m.list) && m.list.length) { applyIncomingClips(m.list); return; }
+  if (m.k === 'prefs') { applyConsolePrefs(m.prefs); return; }
+  if (m.k === 'hello') { sendClips(); send({ k: 'hello' }); pushPreview(); if (meterWant) send({ k: 'cmd', action: 'meters', v: true }); return; }
+};
+
+function syncSettings() {
+  cmd({ action: 'vol', v: +$('#vol').value / 100 });
+  cmd({ action: 'sfxVol', v: +$('#sfxVol').value / 100 });
+  cmd({ action: 'duck', v: $('#duck').checked });
+  cmd({ action: 'speed', x: +$('#speed').value });
+  Object.keys(sfxLoopPref).forEach(function (lb) {
+    cmd({ action: 'sfxLoop', label: lb, v: !!sfxLoopPref[lb] });
+  });
+}
+
+/* ---------- 操作 ---------- */
+function cmd(m) { m.k = 'cmd'; send(m); }
+window.cmd = cmd;
+$('#bPlay').onclick = function () { cmd({ action: 'toggle' }); };
+$('#bPrev').onclick = function () { cmd({ action: 'prev' }); };
+$('#bNext').onclick = function () { cmd({ action: 'next' }); };
+$('#bRestart').onclick = function () { cmd({ action: 'restart' }); };
+$('#bChain').onclick = function () { cmd({ action: 'chain', v: !(st && st.chain) }); };
+$('#bLoop').onclick = function () { cmd({ action: 'loop', v: !(st && st.loop) }); };
+$('#bA').onclick = function () { cmd({ action: 'ab', mode: 'a' }); };
+$('#bB').onclick = function () { cmd({ action: 'ab', mode: 'b' }); };
+$('#bAbClear').onclick = function () { cmd({ action: 'ab', mode: 'clear' }); };
+$('#bFull').onclick = function () { cmd({ action: 'fullscreen', on: !(st && st.fs) }); };
+$('#bQuiet').onclick = function () { cmd({ action: 'quiet', v: !(st && st.quiet) }); };
+$('#bBlack').onclick = function () { cmd({ action: 'black', v: !(st && st.black) }); };
+$('#bFit').onclick = function () { cmd({ action: 'fit', mode: (st && st.fit === 'cover') ? 'contain' : 'cover' }); };
+$('#bMute').onclick = function () { cmd({ action: 'mute', v: !(st && st.muted) }); };
+$('#bSfxStop').onclick = function () { cmd({ action: 'sfxStop' }); };
+$('#frameBack').onclick = function () { cmd({ action: 'frame', step: -1 }); };
+$('#frameFwd').onclick = function () { cmd({ action: 'frame', step: 1 }); };
+$('#bPanic').onclick = function () {
+  cmd({ action: 'pause' });
+  cmd({ action: 'sfxStop' });
+  toast('全停：主视频已暂停、全部音效已停止');
+};
+
+document.querySelectorAll('[data-seek]').forEach(function (b) {
+  b.onclick = function () { cmd({ action: 'seekBy', d: +b.dataset.seek }); };
+});
+$('#seek').addEventListener('input', function () {
+  dragging = true;
+  $('#seekFill').style.width = ($('#seek').value / 10) + '%';
+  if (st && st.dur) $('#timeLbl').textContent = fmt($('#seek').value / 1000 * st.dur) + ' / ' + fmt(st.dur);
+});
+$('#seek').addEventListener('change', function () {
+  if (st && st.dur) cmd({ action: 'seek', at: $('#seek').value / 1000 * st.dur });
+  dragging = false;
+});
+$('#vol').addEventListener('input', function () {
+  $('#volLbl').textContent = $('#vol').value + '%';
+  cmd({ action: 'vol', v: +$('#vol').value / 100 });
+});
+$('#sfxVol').addEventListener('input', function () {
+  $('#sfxVolLbl').textContent = $('#sfxVol').value + '%';
+  cmd({ action: 'sfxVol', v: +$('#sfxVol').value / 100 });
+});
+$('#duck').addEventListener('change', function () { cmd({ action: 'duck', v: $('#duck').checked }); });
+$('#speed').addEventListener('change', function () { cmd({ action: 'speed', x: +$('#speed').value }); });
+
+$('#pvOn').onchange = pushPreview;
+$('#pvFps').onchange = pushPreview;
+$('#pvW').onchange = pushPreview;
+function pushPreview() {
+  send({ k: 'preview', on: $('#pvOn').checked, ms: +$('#pvFps').value, w: +$('#pvW').value });
+  try {
+    localStorage.setItem('rp_sample_preview', JSON.stringify({ on: $('#pvOn').checked, ms: $('#pvFps').value, w: $('#pvW').value }));
+  } catch (e) {}
+}
+$('#meterOn').addEventListener('change', function () {
+  meterWant = $('#meterOn').checked;
+  try { localStorage.setItem('rp_sample_meters', meterWant ? '1' : '0'); } catch (e) {}
+  cmd({ action: 'meters', v: meterWant });
+  if (meterWant) toast('已请求真实电平表；若播放端提示不可用，会自动回退成推子读数');
+});
+
+$('#bTheme').onclick = function () {
+  const cur = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+  const next = cur === 'light' ? 'dark' : 'light';
+  document.documentElement.setAttribute('data-theme', next);
+  try { localStorage.setItem('rp_sample_theme', next); } catch (e) {}
+};
+
+/* ---------- 排练包（导出 / 导入 zip） ---------- */
+function setSelX(sel, v) {
+  if (!v) return;
+  const op = $(sel).options;
+  for (let i = 0; i < op.length; i++) if (op[i].value === String(v)) { $(sel).value = String(v); return; }
+}
+function consolePrefs() {
+  return {
+    theme: document.documentElement.getAttribute('data-theme'),
+    cardW: cardW,
+    preview: { on: $('#pvOn').checked, ms: +$('#pvFps').value, w: +$('#pvW').value },
+    meters: !!meterWant,
+    sfxLoop: Object.assign({}, sfxLoopPref)
+  };
+}
+$('#bExport').onclick = function () {
+  cmd({ action: 'export', prefs: consolePrefs() });
+  toast('正在打包：进度显示在大屏窗口，打包期间请不要关窗口');
+};
+$('#bImport').onclick = function () {
+  cmd({ action: 'import' });
+  toast('已让大屏窗口弹出选择框，选一个 排练包-*.zip');
+};
+function applyIncomingClips(list) {
+  const cur = (st && clips[st.idx]) ? clips[st.idx].src : null;
+  clips = list;
+  order = clips.map(function (_, i) { return i; });
+  sel = -1;
+  if (cur) for (let i = 0; i < clips.length; i++) if (clips[i].src === cur) { sel = i; break; }
+  gridSig = '';
+  renderGrid();
+  sendClips();
+  toast('已按排练包同步片段表：' + clips.length + ' 个');
+}
+function applyConsolePrefs(p) {
+  if (!p) return;
+  if (p.theme === 'light' || p.theme === 'dark') {
+    document.documentElement.setAttribute('data-theme', p.theme);
+    try { localStorage.setItem('rp_sample_theme', p.theme); } catch (e) {}
+  }
+  if (isFinite(p.cardW)) { $('#cardW').value = p.cardW; applyCardW(+p.cardW); gridSig = ''; renderGrid(); }
+  if (p.preview) {
+    if (p.preview.on != null) $('#pvOn').checked = !!p.preview.on;
+    setSelX('#pvFps', p.preview.ms);
+    setSelX('#pvW', p.preview.w);
+    pushPreview();
+  }
+  if (p.meters != null) {
+    $('#meterOn').checked = !!p.meters;
+    meterWant = !!p.meters;
+    try { localStorage.setItem('rp_sample_meters', meterWant ? '1' : '0'); } catch (e) {}
+    cmd({ action: 'meters', v: meterWant });
+  }
+  if (p.sfxLoop) {
+    Object.keys(p.sfxLoop).forEach(function (lb) { sfxLoopPref[lb] = !!p.sfxLoop[lb]; });
+    try { localStorage.setItem('rp_sample_sfxloop', JSON.stringify(sfxLoopPref)); } catch (e) {}
+    renderSfx();
+  }
+  toast('已套用排练包里的控制台设置');
+}
+
+$('#cardW').addEventListener('input', function () {
+  applyCardW(+$('#cardW').value);
+  gridSig = ''; renderGrid();
+});
+$('#bCardWReset').onclick = function () { $('#cardW').value = CARD_W_DEF; applyCardW(CARD_W_DEF); gridSig = ''; renderGrid(); };
+
+/* ---------- 音效板 ---------- */
+function renderSfx() {
+  const row = $('#sfxRow');
+  const lrow = $('#sfxLoopRow');
+  row.innerHTML = '';
+  lrow.innerHTML = '<span class="lab">循环</span>';
+  sfxList.forEach(function (s) {
+    const b = document.createElement('button');
+    b.className = 'sfx';
+    b.setAttribute('data-label', s.label);
+    b.textContent = '♪ ' + s.label;
+    b.onclick = function () {
+      const active = (st && st.sfxActive) || [];
+      if (active.indexOf(s.label) >= 0) { send({ k: 'cmd', action: 'sfxStop', label: s.label }); return; }
+      send({ k: 'cmd', action: 'sfx', url: s.src, label: s.label });
+    };
+    row.appendChild(b);
+
+    const wrap = document.createElement('label');
+    wrap.className = 'row';
+    wrap.style.gap = '5px';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.setAttribute('data-label', s.label);
+    cb.checked = !!sfxLoopPref[s.label];
+    cb.onchange = function () {
+      sfxLoopPref[s.label] = cb.checked;
+      try { localStorage.setItem('rp_sample_sfxloop', JSON.stringify(sfxLoopPref)); } catch (e) {}
+      send({ k: 'cmd', action: 'sfxLoop', label: s.label, v: cb.checked });
+    };
+    const t = document.createElement('span');
+    t.textContent = s.label;
+    t.style.fontSize = '12px';
+    wrap.appendChild(cb); wrap.appendChild(t);
+    lrow.appendChild(wrap);
+  });
+}
+
+$('#bUp').onclick = function () { move(-1); };
+$('#bDown').onclick = function () { move(1); };
+$('#bReset').onclick = function () {
+  order = clips.map(function (_, i) { return i; });
+  sel = -1; gridSig = ''; renderGrid(); sendClips(); toast('已恢复默认顺序');
+};
+function move(d) {
+  if (sel < 0) { toast('先在片段条上点一个卡片选中它'); return; }
+  const t = sel + d;
+  if (t < 0 || t >= order.length) return;
+  const a = order[sel]; order[sel] = order[t]; order[t] = a;
+  sel = t; gridSig = ''; renderGrid(); sendClips();
+}
+
+function keyOffset(k) { return k === '0' ? 5 : (parseInt(k, 10) - 5); }
+function jumpRel(off) {
+  if (off === 0) { cmd({ action: 'restart' }); return; }
+  const t = idx + off;
+  if (t >= 0 && t < clips.length) { sel = t; gridSig = ''; cmd({ action: 'goto', idx: t, at: 0 }); }
+}
+document.addEventListener('keydown', function (e) {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
+  const k = e.key;
+  if (k === ' ') { cmd({ action: 'toggle' }); e.preventDefault(); return; }
+  if (k === 'ArrowLeft') { cmd({ action: 'seekBy', d: -5 }); return; }
+  if (k === 'ArrowRight') { cmd({ action: 'seekBy', d: 5 }); return; }
+  if (k === 'ArrowUp') { cmd({ action: 'vol', v: Math.min(1, (st ? st.vol : 0.99) + 0.05) }); return; }
+  if (k === 'ArrowDown') { cmd({ action: 'vol', v: Math.max(0, (st ? st.vol : 0.99) - 0.05) }); return; }
+  if (k === ',' || k === '<') { cmd({ action: 'frame', step: -1 }); return; }
+  if (k === '.' || k === '>') { cmd({ action: 'frame', step: 1 }); return; }
+  if (k === 'm' || k === 'M') { cmd({ action: 'mute', v: !(st && st.muted) }); return; }
+  if (k === 'x' || k === 'X') { cmd({ action: 'sfxStop' }); return; }
+  if (k === 'f' || k === 'F') { cmd({ action: 'fullscreen', on: !(st && st.fs) }); return; }
+  if (k === 'b' || k === 'B') { cmd({ action: 'black', v: !(st && st.black) }); return; }
+  if (k === 't' || k === 'T') { cmd({ action: 'fit', mode: (st && st.fit === 'cover') ? 'contain' : 'cover' }); return; }
+  if (k === 'l' || k === 'L') { cmd({ action: 'loop', v: !(st && st.loop) }); return; }
+  if (k === 'c' || k === 'C') { cmd({ action: 'chain', v: !(st && st.chain) }); return; }
+  if (/^[0-9]$/.test(k)) jumpRel(keyOffset(k));
+});
+
+/* ---------- 启动 ---------- */
+(function boot() {
+  try {
+    const th = localStorage.getItem('rp_sample_theme');
+    if (th === 'light' || th === 'dark') document.documentElement.setAttribute('data-theme', th);
+  } catch (e) {}
+  try {
+    const v = parseFloat(localStorage.getItem('rp_sample_cardw'));
+    if (v && v >= 100 && v <= 260) { cardW = v; $('#cardW').value = String(v); }
+  } catch (e) {}
+  try {
+    const p = JSON.parse(localStorage.getItem('rp_sample_preview') || 'null');
+    if (p) {
+      if (p.ms) $('#pvFps').value = String(p.ms);
+      if (p.w) $('#pvW').value = String(p.w);
+      $('#pvOn').checked = p.on !== false;
+    }
+  } catch (e) {}
+  try {
+    const s = JSON.parse(localStorage.getItem('rp_sample_sfxloop') || 'null');
+    if (s) Object.keys(s).forEach(function (k) { sfxLoopPref[k] = !!s[k]; });
+  } catch (e) {}
+  try {
+    if (localStorage.getItem('rp_sample_meters') === '1') { meterWant = true; $('#meterOn').checked = true; }
+  } catch (e) {}
+  applyCardW(cardW);
+  buildMeters();
+  setInterval(function () {
+    const d = new Date();
+    $('#clock').textContent = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') + ':' + String(d.getSeconds()).padStart(2, '0');
+  }, 1000);
+})();
+
+Promise.all([
+  fetch('clips.json').then(function (r) { return r.json(); }),
+  fetch('sfx.json').then(function (r) { return r.json(); }).catch(function () { return []; })
+]).then(function (res) {
+  clips = res[0];
+  sfxList = res[1] || [];
+  order = clips.map(function (_, i) { return i; });
+  gridSig = ''; renderGrid(); renderSfx();
+  send({ k: 'hello' });
+  sendClips();
+  setTimeout(pushPreview, 300);
+  if (meterWant) cmd({ action: 'meters', v: true });
+});
+
+setInterval(function () { renderState(); setFrameInfo(); }, 500);
+setInterval(meterTick, 60);
+setInterval(function () { if (!st || Date.now() - lastState > 4000) send({ k: 'hello' }); }, 3000);
+
+window.__cdbg = function () {
+  return {
+    idx: idx, sel: sel, order: order.slice(0, 6), cardW: cardW, sfx: sfxList.length, st: st,
+    meterWant: meterWant, lastMeters: lastMeters, theme: document.documentElement.getAttribute('data-theme'),
+  };
+};
+</script>
+</body>
+</html>

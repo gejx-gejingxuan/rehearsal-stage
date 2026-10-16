@@ -394,7 +394,9 @@ function fmt(t) {
 function dbStr(x) {
   if (!isFinite(x) || x <= 0) return '-∞';
   const d = 20 * Math.log10(x);
-  return (d < -60 ? -60 : d).toFixed(1) + ' dB';
+  /* 四舍五入到 0.1 再 +0：避免出现 -0.0 dB 这种读数 */
+  const q = Math.round((d < -60 ? -60 : d) * 10) / 10 + 0;
+  return q.toFixed(1) + ' dB';
 }
 function list() { return order.map(function (i) { return clips[i]; }); }
 function clipAt(pos) { return clips[order[pos]]; }

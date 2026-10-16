@@ -113,7 +113,7 @@
 
   /* ---------- 片段 cue 列表 ---------- */
   #strip{display:flex;flex-wrap:nowrap;gap:7px;overflow-x:auto;overflow-y:hidden;padding:4px 2px 10px;scroll-behavior:smooth}
-  .clip{flex:0 0 auto;width:var(--card-w);background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--line2);border-radius:6px;padding:0 0 4px;cursor:pointer;transition:.12s;overflow:hidden}
+  .clip{flex:0 0 auto;width:var(--card-w);background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--line2);border-radius:6px;padding:0 0 4px;cursor:pointer;transition:.12s;overflow:hidden;position:relative;user-select:none}
   .clip:hover{border-color:var(--blue);border-left-color:var(--blue)}
   .clip.cur{border-color:var(--amber);border-left-color:var(--amber);background:rgba(255,176,32,.10);box-shadow:0 0 0 1px rgba(255,176,32,.35) inset}
   .clip.sel{border-color:var(--cyan);border-left-color:var(--cyan)}
@@ -124,6 +124,13 @@
   .clip .th{position:relative;width:100%;aspect-ratio:16/9;background:var(--sunk);border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:center;overflow:hidden}
   .clip .th img{width:100%;height:100%;object-fit:cover;display:block}
   .clip .th .ph{font-size:17px;line-height:1;filter:grayscale(1);opacity:.34}
+  .clip .x{position:absolute;top:5px;right:5px;width:20px;height:20px;border-radius:6px;background:rgba(8,10,14,.76);border:1px solid var(--line2);color:var(--ink2);font:400 13px/18px var(--mono);text-align:center;cursor:pointer;opacity:0;transition:.12s;z-index:3}
+  .clip:hover .x,.clip.sel .x{opacity:1}
+  .clip .x:hover{background:var(--red);border-color:var(--red);color:#fff}
+  .clip.dragging{opacity:.4}
+  .clip.dropL{box-shadow:inset 3px 0 0 var(--cyan)}
+  .clip.dropR{box-shadow:inset -3px 0 0 var(--cyan)}
+  #strip.dragover{outline:1px dashed var(--cyan);outline-offset:-3px}
   .clip .n,.clip .t,.clip .d{padding-left:9px;padding-right:9px}
   .clip .n{padding-top:6px}
   #strip.nothumb .clip .th{display:none}
@@ -274,7 +281,7 @@
   </div>
 
   <div class="card" style="margin-top:12px">
-    <h2 class="cue">片段 CUE STACK <em>横向排列可滚动；点一下＝切到该片段，选中后可用上移/下移调顺序</em></h2>
+    <h2 class="cue">片段 CUE STACK <em>横向排列可滚动；点一下＝切到该片段，拖动卡片改顺序，右上角 × 删除</em></h2>
     <div id="strip"></div>
     <input type="file" id="cfFiles" accept="video/*,image/*,.png,.jpg,.jpeg,.gif,.webp,.bmp,.avif" multiple style="display:none">
     <input type="file" id="cfFolder" webkitdirectory directory multiple style="display:none">
@@ -282,6 +289,7 @@
     <div class="row">
       <button id="bUp">↑ 上移</button>
       <button id="bDown">↓ 下移</button>
+      <button id="bDel" title="删除选中的片段（Del / Backspace，Ctrl+Z 撤销）">🗑 删除选中</button>
       <button id="bReset">恢复默认顺序</button>
       <span class="sep"></span>
       <button id="bAddFiles" title="把视频 / 图片追加到大屏的片段表">＋ 素材</button>
@@ -293,6 +301,7 @@
       <button id="bCardWReset">还原</button>
       <span class="pill" id="cntTag">0 个</span>
     </div>
+    <div class="hintline">鼠标拖动卡片＝改顺序（拖到条末空白＝移到最后）；卡片右上角 × 或选中后按 <kbd>Del</kbd> ＝删除，<kbd>Ctrl</kbd>+<kbd>Z</kbd> 撤销删除。也可以把视频 / 图片文件直接拖进本窗口，会追加到大屏。</div>
   </div>
 
   <div class="card" style="margin-top:12px">
@@ -341,6 +350,8 @@
       <b>T</b><span>画面铺满 / 原始比例</span>
       <b>L</b><span>循环开关</span>
       <b>C</b><span>连播开关</span>
+      <b>拖动卡片</b><span>调整片段顺序（也可拖到空白处＝移到最后）</span>
+      <b>Del</b><span>删除选中片段（Ctrl+Z 撤销）</span>
       <b>I</b><span>添加素材（视频 / 图片）</span>
     </div>
   </div>
@@ -363,6 +374,7 @@ let st = null;
 let dragging = false;
 let lastState = 0, lastFrame = 0;
 let sel = -1, gridSig = '', toastTimer = null, cardW = CARD_W_DEF;
+let dragFrom = -1, dropRef = null, delStack = [];
 let pvFrames = 0, pvT0 = 0, pvFps = 0;
 let syncedOnce = false;
 let lastMeters = null;
@@ -381,7 +393,8 @@ function dbStr(x) {
   return (20 * Math.log10(x)).toFixed(1) + ' dB';
 }
 function list() { return order.map(function (i) { return clips[i]; }); }
-function sendClips() { send({ k: 'clips', list: list() }); }
+function clipAt(pos) { return clips[order[pos]]; }
+function sendClips(exact) { send({ k: 'clips', list: list(), exact: !!exact }); }
 function toast(text) {
   const el = $('#toast');
   el.textContent = text;
@@ -455,6 +468,57 @@ function scrollToCur() {
 const IMG_RE = /\.(jpg|jpeg|png|gif|webp|bmp|avif)$/i;
 function isImgClip(c) { return !!c && (c.kind === 'image' || IMG_RE.test(String(c.src || ''))); }
 function gridDur(c) { return isImgClip(c) ? '图片 ' + (c.dur || 5) + 's' : (c.dur || 0) + 's'; }
+/* ---------- 拖拽排序 / 删除片段 ---------- */
+function markDrop(el, pos, side) {
+  const strip = $('#strip');
+  if (strip) Array.prototype.forEach.call(strip.querySelectorAll('.clip'), function (n) { n.classList.remove('dropL', 'dropR'); });
+  el.classList.add(side > 0 ? 'dropR' : 'dropL');
+  dropRef = { el: el, side: side };
+}
+function clearDrop() {
+  dropRef = null;
+  const strip = $('#strip');
+  if (!strip) return;
+  strip.classList.remove('dragover');
+  Array.prototype.forEach.call(strip.querySelectorAll('.clip'), function (n) { n.classList.remove('dropL', 'dropR', 'dragging'); });
+}
+function dropMove(pos, side) {
+  const from = dragFrom;
+  if (from < 0) return;
+  let t = pos + (side > 0 ? 1 : 0);
+  if (from < t) t--;
+  dragFrom = -1;
+  clearDrop();
+  if (t === from || t < 0) return;
+  const item = order.splice(from, 1)[0];
+  order.splice(t, 0, item);
+  sel = t; gridSig = ''; renderGrid(); sendClips(true);
+  toast('顺序已调整 · 现在第 ' + (t + 1) + ' 位');
+}
+function delClip(pos) {
+  if (pos < 0 || pos >= order.length) return;
+  if (order.length <= 1) { toast('至少保留一个片段'); return; }
+  const ci = order[pos];
+  const c = clips[ci];
+  order.splice(pos, 1);
+  clips.splice(ci, 1);
+  order = order.map(function (i) { return i > ci ? i - 1 : i; });
+  delStack.push({ clip: c, pos: pos });
+  if (sel === pos) sel = -1; else if (sel > pos) sel--;
+  gridSig = ''; renderGrid(); sendClips(true);
+  toast('已删除「' + c.label.replace(/^\d+ · /, '') + '」 · Ctrl+Z 可撤销');
+}
+function undoDel() {
+  const d = delStack.pop();
+  if (!d) { toast('没有可撤销的删除'); return; }
+  const ci = Math.min(d.pos, clips.length);
+  clips.splice(ci, 0, d.clip);
+  order = order.map(function (i) { return i >= ci ? i + 1 : i; });
+  order.splice(d.pos, 0, ci);
+  sel = d.pos;
+  gridSig = ''; renderGrid(); sendClips(true);
+  toast('已恢复「' + d.clip.label.replace(/^\d+ · /, '') + '」');
+}
 /* 把缩略图塞进卡片的 .th 块；没有就显示占位符 */
 function fillThumb(el, c) {
   const th = el.querySelector('.th');
@@ -509,7 +573,8 @@ function renderGrid() {
     d.className = 'clip' + (pos === idx ? ' cur' : '') + (pos === sel ? ' sel' : '');
     d.style.width = cardW + 'px';
     d.__clip = c;
-    d.innerHTML = '<div class="th"></div>' +
+    d.draggable = true;
+    d.innerHTML = '<span class="x" title="删除这个片段">×</span><div class="th"></div>' +
       '<div class="n"><span>' + String(pos + 1).padStart(2, '0') + '</span><span>' +
       (pos === idx ? '▶ 正在' : '') + '</span></div>' +
       '<div class="t">' + c.label.replace(/^\d+ · /, '') + '</div>' +
@@ -519,21 +584,45 @@ function renderGrid() {
       sel = pos; gridSig = ''; renderGrid();
       send({ k: 'cmd', action: 'goto', idx: pos, at: 0 });
     };
+    d.querySelector('.x').onclick = function (e) {
+      e.stopPropagation();
+      delClip(pos);
+    };
+    d.ondragstart = function (e) {
+      dragFrom = pos;
+      try { e.dataTransfer.setData('text/plain', String(pos)); e.dataTransfer.effectAllowed = 'move'; } catch (er) {}
+      d.classList.add('dragging');
+    };
+    d.ondragend = function () { clearDrop(); dragFrom = -1; };
+    d.ondragover = function (e) {
+      if (dragFrom < 0) return;
+      e.preventDefault(); e.stopPropagation();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+      const r = d.getBoundingClientRect();
+      markDrop(d, pos, (e.clientX - r.left) > r.width / 2 ? 1 : 0);
+    };
+    d.ondrop = function (e) {
+      if (dragFrom < 0) return;
+      e.preventDefault(); e.stopPropagation();
+      const r = d.getBoundingClientRect();
+      const side = (dropRef && dropRef.el === d) ? dropRef.side : ((e.clientX - r.left) > r.width / 2 ? 1 : 0);
+      dropMove(pos, side);
+    };
     strip.appendChild(d);
   });
-  $('#cntTag').textContent = clips.length + ' 个';
+  $('#cntTag').textContent = order.length + ' 个';
   scrollToCur();
 }
 
 function renderState() {
-  if (!clips.length) return;
+  if (!order.length) return;
   const ok = st && Date.now() - lastState < 4000;
   led('#ledConn', ok ? 'on' : 'bad');
   if (!st) return;
 
   idx = st.idx;
-  const c = clips[idx];
-  $('#curTag').textContent = c ? ((idx + 1) + '/' + clips.length + ' · ' + c.label.replace(/^\d+ · /, '')) : '未开始';
+  const c = clipAt(idx);
+  $('#curTag').textContent = c ? ((idx + 1) + '/' + order.length + ' · ' + c.label.replace(/^\d+ · /, '')) : '未开始';
   $('#bPlay').textContent = st.playing ? '⏸ 暂停' : '▶ 播放';
   $('#timeLbl').textContent = fmt(st.time) + ' / ' + fmt(st.dur || (c ? c.dur : 0));
 
@@ -644,7 +733,7 @@ bc.onmessage = function (e) {
     st = m;
     if (meterWant && !m.metersOn) meterWant = false;
     renderState();
-    if (clips.length && m.count !== clips.length) sendClips();
+    if (order.length && m.count !== order.length) sendClips();
     if (!syncedOnce && clips.length) { syncedOnce = true; syncSettings(); }
     return;
   }
@@ -771,15 +860,26 @@ $('#bExport').onclick = function () {
 };
 /* 导入包在本窗口选文件，选完直接递给大屏窗口（不靠大屏窗口的焦点） */
 $('#bImport').onclick = function () { $('#cfZip').click(); };
+/* 列表和本地一模一样就不重排、不弹提示（播放端 hello 时会把它的表回回来） */
+function sameList(list) {
+  if (!Array.isArray(list) || list.length !== order.length) return false;
+  for (let i = 0; i < list.length; i++) {
+    const c = clipAt(i);
+    if (!c || c.src !== list[i].src) return false;
+  }
+  return true;
+}
 function applyIncomingClips(list) {
-  const cur = (st && clips[st.idx]) ? clips[st.idx].src : null;
+  if (sameList(list)) return;
+  const prev = clipAt(st ? st.idx : -1);
+  const cur = prev ? prev.src : null;
   clips = list;
   order = clips.map(function (_, i) { return i; });
   sel = -1;
   if (cur) for (let i = 0; i < clips.length; i++) if (clips[i].src === cur) { sel = i; break; }
   gridSig = '';
   renderGrid();
-  sendClips();
+  sendClips(true);
   toast('片段表已同步：' + clips.length + ' 个');
 }
 function applyConsolePrefs(p) {
@@ -836,7 +936,7 @@ $('#cfZip').addEventListener('change', function (e) {
 });
 $('#imgHold').addEventListener('change', function () {
   const secs = +$('#imgHold').value || 5;
-  clips.forEach(function (c) { if (isImgClip(c)) c.dur = secs; });
+  order.forEach(function (i) { if (isImgClip(clips[i])) clips[i].dur = secs; });
   gridSig = ''; renderGrid();
   cmd({ action: 'imgHold', v: secs });
 });
@@ -885,21 +985,63 @@ $('#bUp').onclick = function () { move(-1); };
 $('#bDown').onclick = function () { move(1); };
 $('#bReset').onclick = function () {
   order = clips.map(function (_, i) { return i; });
-  sel = -1; gridSig = ''; renderGrid(); sendClips(); toast('已恢复默认顺序');
+  sel = -1; delStack = []; gridSig = ''; renderGrid(); sendClips(true); toast('已恢复默认顺序');
 };
 function move(d) {
   if (sel < 0) { toast('先在片段条上点一个卡片选中它'); return; }
   const t = sel + d;
   if (t < 0 || t >= order.length) return;
   const a = order[sel]; order[sel] = order[t]; order[t] = a;
-  sel = t; gridSig = ''; renderGrid(); sendClips();
+  sel = t; gridSig = ''; renderGrid(); sendClips(true);
 }
 
+$('#bDel').onclick = function () {
+  if (sel < 0) { toast('先在片段条上点一个卡片选中它'); return; }
+  delClip(sel);
+};
+const stripEl = $('#strip');
+stripEl.addEventListener('dragover', function (e) {
+  if (dragFrom < 0) return;
+  e.preventDefault();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+  clearDrop();
+  stripEl.classList.add('dragover');
+});
+stripEl.addEventListener('drop', function (e) {
+  if (dragFrom < 0) return;
+  e.preventDefault();
+  clearDrop();
+  dropMove(order.length - 1, 1);
+});
+stripEl.addEventListener('dragleave', function (e) {
+  if (dragFrom < 0) return;
+  if (e.target === stripEl) clearDrop();
+});
+/* 把素材文件直接拖进控制台窗口 = 送给大屏追加（与卡片拖拽互不干扰） */
+window.addEventListener('dragover', function (e) {
+  if (dragFrom >= 0) return;
+  const dt = e.dataTransfer;
+  if (!dt) return;
+  const ty = dt.types ? Array.prototype.slice.call(dt.types) : [];
+  if (ty.indexOf('Files') < 0) return;
+  e.preventDefault();
+  dt.dropEffect = 'copy';
+});
+window.addEventListener('drop', function (e) {
+  if (dragFrom >= 0) return;
+  const dt = e.dataTransfer;
+  if (!dt) return;
+  const files = dt.files ? Array.prototype.slice.call(dt.files) : [];
+  if (!files.length) return;
+  e.preventDefault();
+  send({ k: 'files', files: files });
+  toast('已送出 ' + files.length + ' 个素材，大屏窗口会接着编号');
+});
 function keyOffset(k) { return k === '0' ? 5 : (parseInt(k, 10) - 5); }
 function jumpRel(off) {
   if (off === 0) { cmd({ action: 'restart' }); return; }
   const t = idx + off;
-  if (t >= 0 && t < clips.length) { sel = t; gridSig = ''; cmd({ action: 'goto', idx: t, at: 0 }); }
+  if (t >= 0 && t < order.length) { sel = t; gridSig = ''; cmd({ action: 'goto', idx: t, at: 0 }); }
 }
 document.addEventListener('keydown', function (e) {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
@@ -919,6 +1061,8 @@ document.addEventListener('keydown', function (e) {
   if (k === 'l' || k === 'L') { cmd({ action: 'loop', v: !(st && st.loop) }); return; }
   if (k === 'c' || k === 'C') { cmd({ action: 'chain', v: !(st && st.chain) }); return; }
   if (k === 'i' || k === 'I') { $('#cfFiles').click(); return; }
+  if (k === 'Delete' || k === 'Backspace') { if (sel >= 0) delClip(sel); e.preventDefault(); return; }
+  if ((k === 'z' || k === 'Z') && (e.ctrlKey || e.metaKey)) { undoDel(); e.preventDefault(); return; }
   if (/^[0-9]$/.test(k)) jumpRel(keyOffset(k));
 });
 

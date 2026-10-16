@@ -20,6 +20,7 @@
   html,body{margin:0}
   body{background:var(--bg);color:var(--ink);font:14px/1.5 'Microsoft YaHei',system-ui,sans-serif}
   .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+  .mono.gain{color:var(--amber)}
 
   /* ---------- 顶栏 ---------- */
   header{position:sticky;top:0;z-index:30;background:linear-gradient(180deg,var(--panel2),var(--panel));border-bottom:1px solid var(--line);padding:8px 14px 9px;display:flex;flex-direction:column;gap:7px}
@@ -196,7 +197,7 @@
           <span class="db" id="dbV">--</span>
         </div>
         <div class="row" style="margin-top:6px">
-          <input type="range" id="vol" min="0" max="100" value="99" style="flex:1;min-width:110px">
+          <input type="range" id="vol" min="0" max="200" value="99" list="volTicks" style="flex:1;min-width:110px">
           <span class="mono" id="volLbl" style="width:40px;text-align:right;color:var(--ink2)">99%</span>
           <button id="bMute">静音主视频</button>
         </div>
@@ -206,10 +207,11 @@
           <span class="db" id="dbS">--</span>
         </div>
         <div class="row" style="margin-top:6px">
-          <input type="range" id="sfxVol" min="0" max="100" value="100" style="flex:1;min-width:110px">
+          <input type="range" id="sfxVol" min="0" max="200" value="100" list="volTicks" style="flex:1;min-width:110px">
           <span class="mono" id="sfxVolLbl" style="width:40px;text-align:right;color:var(--ink2)">100%</span>
           <button id="bSfxStop">■ 停止音效</button>
         </div>
+        <datalist id="volTicks"><option value="100" label="100%"></option></datalist>
         <div class="row" style="margin-top:10px">
           <label class="row" style="gap:6px"><input type="checkbox" id="duck"> 触发音效时自动静音主视频（音效结束后自动恢复）</label>
           <span class="pill" id="meterState">电平表：推子</span>
@@ -334,12 +336,12 @@
       <label class="row" style="gap:6px"><input type="checkbox" id="imgAuto"> 图片自动前进（连播关着也走）</label>
       <span class="pill">图片按该秒数停留；播放中会吃掉主视频的画面与时间码</span>
     </div>
-    <div class="hintline">老电脑卡就把预览帧率/尺寸调低。实时电平表会额外占用一点 CPU；若提示不可用会自动回退成推子读数。</div>
+    <div class="hintline">老电脑卡就把预览帧率/尺寸调低。实时电平表会额外占用一点 CPU；若提示不可用会自动回退成推子读数。音量推子最高 200%，超过 100% 是增益放大（读数标黄）。</div>
     <div class="row" style="margin-top:12px"><b style="font-size:12px;letter-spacing:1px;color:var(--ink2)">快捷键（控制台窗口内生效）</b></div>
     <div class="kv gridfix" style="margin-top:7px">
       <b>空格</b><span>播放 / 暂停</span>
       <b>← →</b><span>快退 / 快进 5 秒</span>
-      <b>↑ ↓</b><span>主视频音量 ±5%</span>
+      <b>↑ ↓</b><span>主视频音量 ±5%（最高 200%）</span>
       <b>, .</b><span>后退 / 前进一帧</span>
       <b>1 2 3 4</b><span>回到前面第 1~4 个片段</span>
       <b>5</b><span>重播当前片段</span>
@@ -396,7 +398,7 @@ function dbStr(x) {
   const d = 20 * Math.log10(x);
   /* 四舍五入到 0.1 再 +0：避免出现 -0.0 dB 这种读数 */
   const q = Math.round((d < -60 ? -60 : d) * 10) / 10 + 0;
-  return q.toFixed(1) + ' dB';
+  return (q > 0 ? '+' : '') + q.toFixed(1) + ' dB';
 }
 function list() { return order.map(function (i) { return clips[i]; }); }
 function clipAt(pos) { return clips[order[pos]]; }
@@ -708,9 +710,11 @@ function renderState() {
   const pv = Math.round((st.vol || 0) * 100);
   if (Math.abs(+$('#vol').value - pv) > 1) $('#vol').value = pv;
   $('#volLbl').textContent = pv + '%';
+  $('#volLbl').classList.toggle('gain', pv > 100);
   const sv = Math.round((st.sfxVol == null ? 1 : st.sfxVol) * 100);
   if (Math.abs(+$('#sfxVol').value - sv) > 1) $('#sfxVol').value = sv;
   $('#sfxVolLbl').textContent = sv + '%';
+  $('#sfxVolLbl').classList.toggle('gain', sv > 100);
 
   const live = meterWant && st.metersOn;
   $('#meterState').textContent = live ? '电平表：实时峰值' : (meterWant ? '电平表：不可用，已回退推子' : '电平表：推子');
@@ -840,10 +844,12 @@ $('#seek').addEventListener('change', function () {
 });
 $('#vol').addEventListener('input', function () {
   $('#volLbl').textContent = $('#vol').value + '%';
+  $('#volLbl').classList.toggle('gain', +$('#vol').value > 100);
   cmd({ action: 'vol', v: +$('#vol').value / 100 });
 });
 $('#sfxVol').addEventListener('input', function () {
   $('#sfxVolLbl').textContent = $('#sfxVol').value + '%';
+  $('#sfxVolLbl').classList.toggle('gain', +$('#sfxVol').value > 100);
   cmd({ action: 'sfxVol', v: +$('#sfxVol').value / 100 });
 });
 $('#duck').addEventListener('change', function () { cmd({ action: 'duck', v: $('#duck').checked }); });
@@ -1082,7 +1088,7 @@ document.addEventListener('keydown', function (e) {
   if (k === ' ') { cmd({ action: 'toggle' }); e.preventDefault(); return; }
   if (k === 'ArrowLeft') { cmd({ action: 'seekBy', d: -5 }); return; }
   if (k === 'ArrowRight') { cmd({ action: 'seekBy', d: 5 }); return; }
-  if (k === 'ArrowUp') { cmd({ action: 'vol', v: Math.min(1, (st ? st.vol : 0.99) + 0.05) }); return; }
+  if (k === 'ArrowUp') { cmd({ action: 'vol', v: Math.min(2, (st ? st.vol : 0.99) + 0.05) }); return; }
   if (k === 'ArrowDown') { cmd({ action: 'vol', v: Math.max(0, (st ? st.vol : 0.99) - 0.05) }); return; }
   if (k === ',' || k === '<') { cmd({ action: 'frame', step: -1 }); return; }
   if (k === '.' || k === '>') { cmd({ action: 'frame', step: 1 }); return; }

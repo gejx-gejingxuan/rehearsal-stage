@@ -339,6 +339,49 @@ const POOL = 4;
 const pool = [];
 let sfxVol = 1;
 const sfxLoopCfg = {};
+
+/* ---------------- 超过 100% 的音量：元素 volume 上限是 1，多出来的用 Web Audio 增益补足 ---------------- */
+let volWant = 1, ampWarned = false;
+const amp = { ctx: null, items: new Map() };
+const ampMeter = new Map();   /* 已进增益图的元素：电平直接从图里读（captureStream 对入图音频取不到声音） */
+function ampResume() {
+  if (!amp.ctx || amp.ctx.state !== 'suspended') return;
+  try { amp.ctx.resume().catch(function () {}); } catch (e) {}
+}
+function ampNode(el) {
+  const got = amp.items.get(el);
+  if (got) return got;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return null;
+  try {
+    if (!amp.ctx) amp.ctx = new AC();
+    ampResume();
+    const g = amp.ctx.createGain();
+    g.gain.value = 1;
+    const src = amp.ctx.createMediaElementSource(el);
+    const an = amp.ctx.createAnalyser();
+    an.fftSize = 512;
+    src.connect(an);      /* 分析点放在增益前：读数口径和 captureStream 一致（推子前） */
+    an.connect(g);
+    g.connect(amp.ctx.destination);
+    ampMeter.set(el, { an: an, buf: new Float32Array(an.fftSize) });
+    amp.items.set(el, g);
+    return g;
+  } catch (e) { return null; }
+}
+/* ≤100% 走元素 volume（与原行为完全一致）；>100% 时元素吃满 100%，多出来的交给增益节点 */
+function applyElVol(el, x) {
+  x = clamp(x, 0, 2);
+  if (x > 1 || amp.items.has(el)) {
+    const g = ampNode(el);
+    el.volume = Math.min(1, x);
+    if (!g) return x <= 1;
+    g.gain.value = x > 1 ? x : 1;
+    return true;
+  }
+  el.volume = x;
+  return true;
+}
 let lastSfxLabel = null;
 
 for (let i = 0; i < POOL; i++) {
@@ -351,8 +394,23 @@ for (let i = 0; i < POOL; i++) {
   el.addEventListener('pause', function () { mix(); paint(); });
   el.addEventListener('ended', function () { onSfxEnd(el); });
   document.body.appendChild(el);
-  pool.push({ el: el, label: null, startedAt: 0, timer: null });
+  pool.push({ el: el, label: null, startedAt: 0, timer: null, eff: 0 });
 }
+function setMainVol(x) {
+  x = clamp(x, 0, 2);
+  volWant = x;
+  if (!applyElVol(v, x) && !ampWarned) {
+    ampWarned = true;
+    toast('此浏览器不支持超过 100% 的音量，已按 100% 播放');
+  }
+}
+function applySfxVol(s, x) {
+  x = clamp(x, 0, 2);
+  applyElVol(s.el, x);
+  s.eff = x;
+}
+document.addEventListener('pointerdown', ampResume, true);
+document.addEventListener('keydown', ampResume, true);
 function slotOf(el) { for (let i = 0; i < pool.length; i++) if (pool[i].el === el) return pool[i]; return null; }
 function activeSlots() { return pool.filter(function (s) { return !!s.el.src && !s.el.paused && !s.el.ended; }); }
 function activeLabels() {
@@ -367,15 +425,14 @@ function mix() { v.muted = !!muteUser || (!!duck && anySfx()); }
 
 function fadeTo(s, target, ms) {
   if (s.timer) { clearInterval(s.timer); s.timer = null; }
-  const el = s.el;
-  const from = clamp(el.volume, 0, 1);
-  target = clamp(target, 0, 1);
-  if (ms <= 0) { el.volume = target; return; }
+  const from = s.eff == null ? clamp(s.el.volume, 0, 2) : s.eff;
+  target = clamp(target, 0, 2);
+  if (ms <= 0) { applySfxVol(s, target); return; }
   const t0 = Date.now();
   s.timer = setInterval(function () {
     const k = Math.min(1, (Date.now() - t0) / ms);
-    el.volume = clamp(from + (target - from) * k, 0, 1);
-    if (k >= 1) { clearInterval(s.timer); s.timer = null; el.volume = target; }
+    applySfxVol(s, from + (target - from) * k);
+    if (k >= 1) { clearInterval(s.timer); s.timer = null; applySfxVol(s, target); }
   }, 30);
 }
 
@@ -394,7 +451,7 @@ function playSfx(url, label) {
   s.label = label;
   s.startedAt = Date.now();
   el.loop = !!sfxLoopCfg[label];
-  el.volume = 0;
+  applySfxVol(s, 0);
   try { el.currentTime = 0; } catch (e) {}
   const p = el.play();
   if (p && p.catch) p.catch(function () { toast('音效播放失败：' + label); });
@@ -410,7 +467,7 @@ function onSfxEnd(el) {
   if (s) {
     s.label = null;
     if (s.timer) { clearInterval(s.timer); s.timer = null; }
-    if (!el.loop) el.volume = 0;
+    if (!el.loop) applySfxVol(s, 0);
   }
   mix(); paint(); sendState();
 }
@@ -424,9 +481,8 @@ function stopSfx(label) {
     fadeTo(s, 0, 160);
     setTimeout(function () {
       try { el.pause(); el.currentTime = 0; } catch (e) {}
-      el.volume = 0;
       const t = slotOf(el);
-      if (t) t.label = null;
+      if (t) { applySfxVol(t, 0); t.label = null; } else { el.volume = 0; }
       mix(); paint(); sendState();
     }, 200);
   });
@@ -436,10 +492,10 @@ function stopSfx(label) {
 }
 
 function setSfxVol(x) {
-  sfxVol = clamp(x, 0, 1);
+  sfxVol = clamp(x, 0, 2);
   pool.forEach(function (s) {
     if (!s.el.src) return;
-    if (s.el.paused) s.el.volume = sfxVol; else fadeTo(s, sfxVol, 110);
+    if (s.el.paused) applySfxVol(s, sfxVol); else fadeTo(s, sfxVol, 110);
   });
 }
 
@@ -592,7 +648,7 @@ function sendState() {
     time: imgMode ? imgTime() : (v.currentTime || 0),
     dur: imgMode ? imgLimit() : (isFinite(v.duration) ? v.duration : (c ? c.dur : 0)),
     img: imgMode, imgHold: imgLimit(), imgAuto: imgAuto, kind: isImgClip(c) ? 'image' : 'video',
-    vol: v.volume,
+    vol: volWant,
     muted: !!v.muted,
     speed: v.playbackRate,
     unlocked: unlocked,
@@ -669,6 +725,7 @@ function meterWhy() {
   return '';
 }
 function meterItem(el) {
+  if (ampMeter.has(el)) return ampMeter.get(el);
   const cached = meter.items.get(el);
   if (cached && cached !== 'fail') return cached;
   if (cached === 'fail' && Date.now() - meter.failAt < 2000) return null;
@@ -769,7 +826,7 @@ function handleCmd(m) {
     case 'restart': restartClip(); break;
     case 'seek': setTime(m.at); break;
     case 'seekBy': setTime((v.currentTime || 0) + Number(m.d || 0)); break;
-    case 'vol': v.volume = clamp(m.v, 0, 1); break;
+    case 'vol': setMainVol(m.v); break;
     case 'mute': muteUser = !!m.v; mix(); break;
     case 'sfxVol': setSfxVol(m.v); break;
     case 'sfx': playSfx(m.url, m.label); break;
@@ -915,8 +972,8 @@ document.addEventListener('keydown', function (e) {
   if (k === ' ') { e.preventDefault(); togglePlay(); }
   else if (k === 'ArrowLeft') { e.preventDefault(); setTime((v.currentTime || 0) - 5); }
   else if (k === 'ArrowRight') { e.preventDefault(); setTime((v.currentTime || 0) + 5); }
-  else if (k === 'ArrowUp') { e.preventDefault(); v.volume = clamp(v.volume + 0.05, 0, 1); osd('音量 ' + Math.round(v.volume * 100) + '%'); }
-  else if (k === 'ArrowDown') { e.preventDefault(); v.volume = clamp(v.volume - 0.05, 0, 1); osd('音量 ' + Math.round(v.volume * 100) + '%'); }
+  else if (k === 'ArrowUp') { e.preventDefault(); setMainVol(volWant + 0.05); osd('音量 ' + Math.round(volWant * 100) + '%'); }
+  else if (k === 'ArrowDown') { e.preventDefault(); setMainVol(volWant - 0.05); osd('音量 ' + Math.round(volWant * 100) + '%'); }
   else if (k === 'm' || k === 'M') { muteUser = !muteUser; mix(); osd(muteUser ? '主视频静音' : '主视频有声'); }
   else if (k === 'x' || k === 'X') { stopSfx(); }
   else if (k === 'f' || k === 'F') { toggleFs(); }
@@ -934,6 +991,7 @@ document.addEventListener('keydown', function (e) {
 
 /* ---------------- 启动 ---------------- */
 setInterval(function () {
+  ampResume();   /* 音频上下文万一被浏览器挂起，半秒内自动拉回来 */
   measureFps();
   sendState();
   paint();
@@ -1184,7 +1242,7 @@ function getSfxDefs() {
 }
 function prefsOut() {
   return {
-    vol: v.volume, muted: !!muteUser, duck: duck, quiet: quiet, chain: chain, loop: loop,
+    vol: volWant, muted: !!muteUser, duck: duck, quiet: quiet, chain: chain, loop: loop,
     speed: v.playbackRate, sfxVol: sfxVol, black: black, fit: fit,
     ab: { on: ab.on, a: ab.a, b: ab.b },
     sfxLoops: Object.keys(sfxLoopCfg).filter(function (k) { return sfxLoopCfg[k]; })
@@ -1238,7 +1296,7 @@ async function exportZip(consolePrefs) {
 }
 function applyPrefs(p) {
   if (!p) return;
-  if (isFinite(p.vol)) v.volume = clamp(p.vol, 0, 1);
+  if (isFinite(p.vol)) setMainVol(p.vol);
   if (isFinite(p.speed)) v.playbackRate = clamp(p.speed, 0.25, 4);
   if (isFinite(p.sfxVol)) setSfxVol(p.sfxVol);
   muteUser = !!p.muted; duck = !!p.duck; quiet = !!p.quiet;
@@ -1384,7 +1442,9 @@ window.__dbg = function () {
     idx: idx, count: clips.length, label: c ? c.label : '',
     paused: imgMode ? imgPaused : v.paused, playing: isPlaying(),
     time: imgMode ? imgTime() : v.currentTime, dur: imgMode ? imgLimit() : (isFinite(v.duration) ? v.duration : (c ? c.dur : 0)),
-    vol: v.volume, muted: !!v.muted, speed: v.playbackRate,
+    vol: volWant, muted: !!v.muted, speed: v.playbackRate,
+    amp: amp.items.has(v) ? amp.items.get(v).gain.value : null, ampState: amp.ctx ? amp.ctx.state : null,
+    sfxAmp: (function () { const s = activeSlots()[0]; return s && amp.items.has(s.el) ? amp.items.get(s.el).gain.value : null; })(),
     unlocked: unlocked, quiet: quiet, duck: duck, chain: chain, loop: loop,
     ab: { on: ab.on, a: ab.a, b: ab.b },
     sfxPlaying: anySfx(), sfxLabel: lastSfxLabel, sfxActive: activeLabels(),

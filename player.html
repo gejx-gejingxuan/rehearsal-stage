@@ -808,7 +808,7 @@ bc.onmessage = function (e) {
   if (m.k === 'hello') {
     lastConsoleAt = Date.now();
     sendState();
-    if (booted && useMap && clips.length) send({ k: 'clips', list: clips });
+    if (clips.length) broadcastClips(true);
     sendThumbsAll(); syncThumbs();
     return;
   }
@@ -860,13 +860,23 @@ function mergeClips(list) {
   });
   return { list: out, kept: kept };
 }
+/* 片段表一变就广播一次，晚开的大屏 / 控制台才跟得上（exact 是控制台下发的，不再回传，避免打乒乓） */
+let lastClipsSig = '';
+function clipsSig() {
+  return clips.map(function (c) { return c.src + '|' + c.label + '|' + c.kind + '|' + c.dur; }).join(',');
+}
+function broadcastClips(force) {
+  const s = clipsSig();
+  if (!force && s === lastClipsSig) return;
+  lastClipsSig = s;
+  send({ k: 'clips', list: clips });
+}
 function setClips(list, exact) {
   if (!Array.isArray(list) || !list.length) return;
   if (!booted) { pendingClips = list; return; }
   const first = !clips.length;
   const cur = clips[idx] ? clips[idx].src : null;
-  let extra = 0;
-  if (useMap && !exact) { const m = mergeClips(list); list = m.list; extra = m.kept; }
+  if (useMap && !exact) list = mergeClips(list).list;
   clips = list;
   let pos = -1;
   if (cur) for (let i = 0; i < clips.length; i++) if (clips[i].src === cur) { pos = i; break; }
@@ -880,7 +890,7 @@ function setClips(list, exact) {
     idx = Math.min(idx, clips.length - 1);
     loadAt(idx, 0);
   }
-  if (extra) send({ k: 'clips', list: clips });
+  if (!exact) broadcastClips();
   syncThumbs();
 }
 
@@ -1025,7 +1035,7 @@ function addMedia(files) {
     $('#hintStart').style.display = 'block';
     loadAt(0, 0);
   }
-  send({ k: 'clips', list: clips });
+  broadcastClips(true);
   toast('素材：新增 ' + added + ' 个 · 补上 ' + filled + ' 个' + (dup ? ' · 跳过重复 ' + dup + ' 个' : ''));
   syncThumbs();
 }
@@ -1315,7 +1325,7 @@ async function importZip(file) {
   $('#hintStart').style.display = 'block';
   pickMsg('');
   loadAt(0, 0);
-  send({ k: 'clips', list: clips });
+  broadcastClips(true);
   applyPrefs(cfg && cfg.prefs);
   syncThumbs();
   if (cfg && cfg.console) send({ k: 'prefs', prefs: cfg.console });

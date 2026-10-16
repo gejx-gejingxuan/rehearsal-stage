@@ -131,6 +131,7 @@
   .clip.dropL{box-shadow:inset 3px 0 0 var(--cyan)}
   .clip.dropR{box-shadow:inset -3px 0 0 var(--cyan)}
   #strip.dragover{outline:1px dashed var(--cyan);outline-offset:-3px}
+  .emptycue{flex:0 0 auto;width:100%;padding:15px 10px;color:var(--ink3);font-size:12.5px;border:1px dashed var(--line2);border-radius:6px;text-align:center;line-height:1.6}
   .clip .n,.clip .t,.clip .d{padding-left:9px;padding-right:9px}
   .clip .n{padding-top:6px}
   #strip.nothumb .clip .th{display:none}
@@ -566,6 +567,14 @@ function renderGrid() {
   gridSig = sig;
   const strip = $('#strip');
   strip.innerHTML = '';
+  if (!order.length) {
+    const ph = document.createElement('div');
+    ph.className = 'emptycue';
+    ph.textContent = '还没有片段 · 在大屏窗口选好素材（也可以把文件直接拖进本窗口），这里会自动同步';
+    strip.appendChild(ph);
+    $('#cntTag').textContent = '0 个';
+    return;
+  }
   order.forEach(function (ci, pos) {
     const c = clips[ci];
     if (!c) return;
@@ -1099,16 +1108,13 @@ document.addEventListener('keydown', function (e) {
   }, 1000);
 })();
 
-Promise.all([
-  fetch('clips.json', { cache: 'no-store' }).then(function (r) { return r.json(); }),
-  fetch('sfx.json', { cache: 'no-store' }).then(function (r) { return r.json(); }).catch(function () { return []; })
-]).then(function (res) {
-  clips = res[0];
-  sfxList = res[1] || [];
-  order = clips.map(function (_, i) { return i; });
-  gridSig = ''; renderGrid(); renderSfx();
+/* 首次进入不带任何片段：CUE 表完全跟着大屏（播放端）走，等它把片段表广播过来 */
+fetch('sfx.json', { cache: 'no-store' }).then(function (r) { return r.json(); }).catch(function () { return []; })
+.then(function (res) {
+  sfxList = res || [];
+  clips = []; order = []; sel = -1; gridSig = '';
+  renderGrid(); renderSfx();
   send({ k: 'hello' });
-  sendClips();
   setTimeout(pushPreview, 300);
   if (meterWant) cmd({ action: 'meters', v: true });
 });

@@ -193,7 +193,7 @@
         <div class="chan">
           <span class="nm">MAIN</span>
           <div class="meter" id="meterV"></div>
-          <span class="db" id="dbV">-∞</span>
+          <span class="db" id="dbV">--</span>
         </div>
         <div class="row" style="margin-top:6px">
           <input type="range" id="vol" min="0" max="100" value="99" style="flex:1;min-width:110px">
@@ -203,7 +203,7 @@
         <div class="chan" style="margin-top:11px">
           <span class="nm">SFX</span>
           <div class="meter" id="meterS"></div>
-          <span class="db" id="dbS">-∞</span>
+          <span class="db" id="dbS">--</span>
         </div>
         <div class="row" style="margin-top:6px">
           <input type="range" id="sfxVol" min="0" max="100" value="100" style="flex:1;min-width:110px">
@@ -214,7 +214,7 @@
           <label class="row" style="gap:6px"><input type="checkbox" id="duck"> 触发音效时自动静音主视频（音效结束后自动恢复）</label>
           <span class="pill" id="meterState">电平表：推子</span>
         </div>
-        <div class="hintline">电平表默认显示推子位置；在「设置」里打开真实电平表后，显示播放端实测峰值（需要在大屏窗口先点过一次画面）。</div>
+        <div class="hintline">亮表＝播放端实测峰值（需要在大屏窗口先点过一次画面）；没有信号时暗表按推子位置显示（待机），不会一直停在 -∞；大屏没连上 / 还没载入素材时读数显示 <b>--</b>。</div>
       </div>
     </div>
 
@@ -380,6 +380,7 @@ let pvFrames = 0, pvT0 = 0, pvFps = 0;
 let syncedOnce = false;
 let lastMeters = null;
 let peakV = 0, peakS = 0, dispV = 0, dispS = 0;
+let liveVAt = 0, liveSAt = 0;   /* 每条通道最近一次读到实测信号的时间 */
 let meterWant = false;
 const sfxLoopPref = {};
 
@@ -389,9 +390,11 @@ function fmt(t) {
   if (!isFinite(t)) t = 0;
   return String(Math.floor(t / 60)).padStart(2, '0') + ':' + String(Math.floor(t % 60)).padStart(2, '0');
 }
+/* -60 dB 是显示下限；只有通道真的关掉（推子 0 / 静音）才回 -∞ */
 function dbStr(x) {
-  if (!x || x <= 0.0005) return '-∞';
-  return (20 * Math.log10(x)).toFixed(1) + ' dB';
+  if (!isFinite(x) || x <= 0) return '-∞';
+  const d = 20 * Math.log10(x);
+  return (d < -60 ? -60 : d).toFixed(1) + ' dB';
 }
 function list() { return order.map(function (i) { return clips[i]; }); }
 function clipAt(pos) { return clips[order[pos]]; }
@@ -435,17 +438,36 @@ function paintMeter(sel, val, peak, faderMode) {
   box.classList.toggle('fader', !!faderMode);
 }
 function meterTick() {
-  const live = meterWant && st && st.metersOn;
+  /* 大屏还没接上 / 还没载入素材：不假装在读表 */
+  if (!st) {
+    dispV = 0; dispS = 0; peakV = 0; peakS = 0;
+    paintMeter('#meterV', 0, 0, true);
+    paintMeter('#meterS', 0, 0, true);
+    $('#dbV').textContent = '--';
+    $('#dbS').textContent = '--';
+    return;
+  }
+  const live = meterWant && st.metersOn;
   const m = (live && lastMeters && Date.now() - lastMeters.t < 1500) ? lastMeters : null;
-  const v = m ? m.v * (st.muted ? 0 : (st.vol == null ? 1 : st.vol)) : (st ? (st.muted ? 0 : st.vol || 0) : 0);
-  const s = m ? m.s * (st ? (st.sfxVol == null ? 1 : st.sfxVol) : 1) : (st ? st.sfxVol || 0 : 0);
-  /* 快起慢落：瞬时上升、缓慢回落，接近真实表弹道 */
-  dispV = Math.max(v, dispV * 0.82);
-  dispS = Math.max(s, dispS * 0.82);
+  const volV = st.muted ? 0 : (st.vol == null ? 1 : st.vol);
+  const volS = st.sfxVol == null ? 1 : st.sfxVol;
+  /* 谁有实测信号谁亮表；一段时间没信号就转暗表，按该通道推子位置显示（待机），不再长期钉在 -∞ */
+  if (m && m.v > 0.002) liveVAt = Date.now();
+  if (m && m.s > 0.002) liveSAt = Date.now();
+  const standbyV = Date.now() - liveVAt > 1200;
+  const standbyS = Date.now() - liveSAt > 1200;
+  const v = standbyV ? volV : (m ? m.v * volV : volV);
+  const s = standbyS ? volS : (m ? m.s * volS : volS);
+  /* 有信号：快起慢落；待机：平滑滑向推子位置（不跳变） */
+  dispV = standbyV ? dispV + (v - dispV) * 0.18 : Math.max(v, dispV * 0.82);
+  dispS = standbyS ? dispS + (s - dispS) * 0.18 : Math.max(s, dispS * 0.82);
+  /* 推子拉到 0 / 静音＝通道关掉，直接归零（读数回 -∞），不用等衰减 */
+  if (!volV) dispV = 0;
+  if (!volS) dispS = 0;
   peakV = Math.max(dispV, peakV - 0.010);
   peakS = Math.max(dispS, peakS - 0.010);
-  paintMeter('#meterV', dispV, m ? peakV : 0, !m);
-  paintMeter('#meterS', dispS, m ? peakS : 0, !m);
+  paintMeter('#meterV', dispV, standbyV ? 0 : peakV, standbyV);
+  paintMeter('#meterS', dispS, standbyS ? 0 : peakS, standbyS);
   $('#dbV').textContent = dbStr(dispV);
   $('#dbS').textContent = dbStr(dispS);
 }

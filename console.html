@@ -68,12 +68,17 @@
   button.panic:hover{background:var(--red);border-color:var(--red)}
   button.key{min-width:40px;text-align:center}
   select{font:inherit;font-size:13px;padding:5px 7px;border:1px solid var(--line2);border-radius:7px;background:var(--key);color:var(--ink)}
+  input[type=text],input[type=number]{font:inherit;font-size:13px;padding:5px 8px;border:1px solid var(--line2);border-radius:7px;background:var(--key);color:var(--ink)}
+  input[type=text]:focus,input[type=number]:focus,select:focus{outline:none;border-color:var(--cyan)}
   input[type=range]{accent-color:var(--amber);height:20px}
   input[type=checkbox]{accent-color:var(--amber)}
   .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12.5px;color:var(--ink2)}
   .row+.row{margin-top:9px}
   .lab{min-width:58px;font-size:11.5px;letter-spacing:.5px;color:var(--ink3)}
   .sep{width:1px;height:20px;background:var(--line);margin:0 2px}
+  .editbar{padding:9px 10px;border:1px solid var(--line);border-radius:8px;background:var(--panel2);margin-top:10px}
+  .editbar.off{opacity:.45}
+  .editbar.off input,.editbar.off button{pointer-events:none}
   .hintline{font-size:11.5px;color:var(--ink3);margin-top:9px;line-height:1.65}
   .pill{font-size:11px;border:1px solid var(--line2);border-radius:20px;padding:2px 9px;color:var(--ink3)}
 
@@ -247,7 +252,7 @@
           <button data-seek="5">+5s</button>
           <button data-seek="10">+10s</button>
           <span class="sep"></span>
-          <span class="lab">倍速</span>
+          <span class="lab">全局倍速</span>
           <select id="speed">
             <option value="0.5">0.5×</option>
             <option value="0.75">0.75×</option>
@@ -309,7 +314,20 @@
       <button id="bCardWReset">还原</button>
       <span class="pill" id="cntTag">0 个</span>
     </div>
-    <div class="hintline">鼠标拖动卡片＝改顺序（拖到条末空白＝移到最后）；卡片右上角 × 或选中后按 <kbd>Del</kbd> ＝删除，<kbd>Ctrl</kbd>+<kbd>Z</kbd> 撤销删除。也可以把视频 / 图片文件直接拖进本窗口，会追加到大屏。</div>
+    <div class="row editbar off" id="ceBar">
+      <span class="lab">片段编辑</span>
+      <input type="text" id="ceName" placeholder="片段名称" maxlength="60" style="width:190px">
+      <span class="sep"></span>
+      <span class="lab">音量</span>
+      <input type="range" id="ceVol" min="0" max="200" step="1" value="100" style="width:130px">
+      <span class="mono" id="ceVolLbl" style="width:46px;font-size:11.5px">100%</span>
+      <span class="sep"></span>
+      <span class="lab">倍速</span>
+      <input type="number" id="ceSpeed" min="0.25" max="4" step="0.05" placeholder="跟随" style="width:82px">
+      <button id="ceReset" title="恢复 100% 音量、跟随全局倍速">还原</button>
+      <span class="mono" id="ceWho" style="margin-left:auto;font-size:11px;color:var(--ink3)">未选中片段</span>
+    </div>
+    <div class="hintline">鼠标拖动卡片＝改顺序（拖到条末空白＝移到最后）；选中卡片后可在下方单独改名称 / 音量 / 倍速（最终音量＝主推子 × 片段音量，倍速留空＝跟随全局）；卡片右上角 × 或 <kbd>Del</kbd> ＝删除，<kbd>Ctrl</kbd>+<kbd>Z</kbd> 撤销。也可以把视频 / 图片文件直接拖进本窗口，会追加到大屏。</div>
   </div>
 
   <div class="card" style="margin-top:12px">
@@ -500,6 +518,31 @@ function scrollToCur() {
 const IMG_RE = /\.(jpg|jpeg|png|gif|webp|bmp|avif)$/i;
 function isImgClip(c) { return !!c && (c.kind === 'image' || IMG_RE.test(String(c.src || ''))); }
 function gridDur(c) { return isImgClip(c) ? '图片 ' + (c.dur || 5) + 's' : (c.dur || 0) + 's'; }
+function plainLabel(s) { return String(s || '').replace(/^\d+\s*·\s*/, ''); }
+function clipVolPct(c) { return Math.round(((c && isFinite(c.vol)) ? c.vol : 1) * 100); }
+function cardMeta(c) {
+  let s = gridDur(c);
+  const p = clipVolPct(c);
+  if (p !== 100) s += ' · ' + p + '%';
+  if (c && isFinite(c.speed) && c.speed > 0) s += ' · ' + c.speed + '×';
+  return s;
+}
+function ceClip() { return sel >= 0 ? clipAt(sel) : null; }
+/* 选中片段后，把名称 / 音量 / 倍速回显到编辑条 */
+function syncEditBar() {
+  const c = ceClip();
+  const bar = $('#ceBar');
+  if (!bar) return;
+  bar.classList.toggle('off', !c);
+  ['#ceName', '#ceVol', '#ceSpeed', '#ceReset'].forEach(function (s) { const el = $(s); if (el) el.disabled = !c; });
+  if (document.activeElement !== $('#ceName')) $('#ceName').value = c ? plainLabel(c.label) : '';
+  const p = c ? clipVolPct(c) : 100;
+  if (document.activeElement !== $('#ceVol')) $('#ceVol').value = String(p);
+  $('#ceVolLbl').textContent = p + '%';
+  $('#ceVolLbl').classList.toggle('gain', p > 100);
+  if (document.activeElement !== $('#ceSpeed')) $('#ceSpeed').value = (c && isFinite(c.speed) && c.speed > 0) ? String(c.speed) : '';
+  $('#ceWho').textContent = c ? ('选中第 ' + String(sel + 1).padStart(2, '0') + ' 个 · ' + plainLabel(c.label)) : '未选中片段';
+}
 /* ---------- 拖拽排序 / 删除片段 ---------- */
 function markDrop(el, pos, side) {
   const strip = $('#strip');
@@ -602,6 +645,7 @@ function renderGrid() {
   const sig = order.join(',') + '|' + idx + '|' + sel + '|' + cardW;
   if (sig === gridSig) return;
   gridSig = sig;
+  syncEditBar();
   const strip = $('#strip');
   strip.innerHTML = '';
   if (!order.length) {
@@ -624,7 +668,7 @@ function renderGrid() {
       '<div class="n"><span>' + String(pos + 1).padStart(2, '0') + '</span><span>' +
       (pos === idx ? '▶ 正在' : '') + '</span></div>' +
       '<div class="t">' + c.label.replace(/^\d+ · /, '') + '</div>' +
-      '<div class="d">' + gridDur(c) + '</div>';
+      '<div class="d">' + cardMeta(c) + '</div>';
     fillThumb(d, c);
     d.onclick = function () {
       sel = pos; gridSig = ''; renderGrid();
@@ -756,7 +800,8 @@ function renderState() {
     if (cb.checked !== on) cb.checked = on;
   });
   $('#duck').checked = !!st.duck;
-  if (document.activeElement !== $('#speed')) $('#speed').value = String(st.speed || 1);
+  const bs = isFinite(st.baseSpeed) ? st.baseSpeed : (st.speed || 1);
+  if (document.activeElement !== $('#speed') && $('#speed').querySelector('option[value="' + bs + '"]')) $('#speed').value = String(bs);
   if (document.activeElement !== $('#imgHold')) $('#imgHold').value = String(st.imgHold || 5);
   if ($('#imgAuto').checked !== !!st.imgAuto) $('#imgAuto').checked = !!st.imgAuto;
   if (document.activeElement !== $('#thumbOn')) $('#thumbOn').checked = st.thumbsOn !== false;
@@ -937,7 +982,10 @@ function sameList(list) {
   if (!Array.isArray(list) || list.length !== order.length) return false;
   for (let i = 0; i < list.length; i++) {
     const c = clipAt(i);
-    if (!c || c.src !== list[i].src) return false;
+    const a = list[i];
+    if (!c || !a || c.src !== a.src || plainLabel(c.label) !== plainLabel(a.label)) return false;
+    if ((isFinite(c.vol) ? c.vol : 1) !== (isFinite(a.vol) ? a.vol : 1)) return false;
+    if ((isFinite(c.speed) ? c.speed : null) !== (isFinite(a.speed) ? a.speed : null)) return false;
   }
   return true;
 }
@@ -1065,6 +1113,66 @@ $('#bClearAll').onclick = function () {
   clips = []; order = []; sel = -1;
   gridSig = ''; renderGrid(); sendClips(true);
   toast('已清空片段表 · Ctrl+Z 可撤销');
+};
+function markCardMeta() {
+  const c = ceClip();
+  if (!c) return;
+  const el = document.querySelectorAll('#strip .clip')[sel];
+  if (!el) return;
+  const d = el.querySelector('.d');
+  if (d) d.textContent = cardMeta(c);
+}
+$('#ceName').addEventListener('input', function () {
+  const c = ceClip();
+  if (!c) return;
+  const pre = (/^\d+\s*·\s*/.exec(c.label) || [''])[0];
+  c.label = pre + this.value;
+  const el = document.querySelectorAll('#strip .clip')[sel];
+  if (el) { const t = el.querySelector('.t'); if (t) t.textContent = this.value; }
+  $('#ceWho').textContent = '选中第 ' + String(sel + 1).padStart(2, '0') + ' 个 · ' + this.value;
+  sendClips(true);
+});
+$('#ceName').addEventListener('change', function () {
+  const c = ceClip();
+  if (!c) return;
+  if (!plainLabel(c.label).trim()) {
+    const nm = String(c.src || '').split('/').pop().replace(/\.[^.]+$/, '');
+    const pre = (/^\d+\s*·\s*/.exec(c.label) || [''])[0];
+    c.label = pre + nm;
+    sendClips(true);
+  }
+  syncEditBar();
+});
+$('#ceVol').addEventListener('input', function () {
+  const c = ceClip();
+  if (!c) return;
+  const p = Math.max(0, Math.min(200, parseInt(this.value, 10) || 0));
+  if (p === 100) delete c.vol; else c.vol = p / 100;
+  $('#ceVolLbl').textContent = p + '%';
+  $('#ceVolLbl').classList.toggle('gain', p > 100);
+  markCardMeta();
+  sendClips(true);
+});
+function applyCeSpeed() {
+  const c = ceClip();
+  if (!c) return;
+  const raw = String($('#ceSpeed').value || '').trim();
+  if (!raw) delete c.speed;
+  else {
+    const s = parseFloat(raw);
+    if (isFinite(s)) c.speed = Math.round(Math.max(0.25, Math.min(4, s)) * 100) / 100;
+    else delete c.speed;
+  }
+  markCardMeta(); syncEditBar(); sendClips(true);
+}
+$('#ceSpeed').addEventListener('change', applyCeSpeed);
+$('#ceSpeed').addEventListener('keydown', function (e) { if (e.key === 'Enter') { applyCeSpeed(); this.blur(); } });
+$('#ceReset').onclick = function () {
+  const c = ceClip();
+  if (!c) return;
+  delete c.vol; delete c.speed;
+  syncEditBar(); markCardMeta(); sendClips(true);
+  toast('已还原「' + plainLabel(c.label) + '」的音量与倍速');
 };
 function move(d) {
   if (sel < 0) { toast('先在片段条上点一个卡片选中它'); return; }

@@ -342,7 +342,7 @@ let sfxVol = 1;
 const sfxLoopCfg = {};
 
 /* ---------------- 超过 100% 的音量：元素 volume 上限是 1，多出来的用 Web Audio 增益补足 ---------------- */
-let volWant = 1, ampWarned = false;
+let volWant = 1, baseSpeed = 1, ampWarned = false;
 const amp = { ctx: null, items: new Map() };
 const ampMeter = new Map();   /* 已进增益图的元素：电平直接从图里读（captureStream 对入图音频取不到声音） */
 function ampResume() {
@@ -383,6 +383,23 @@ function applyElVol(el, x) {
   el.volume = x;
   return true;
 }
+/* 片段级音量 / 倍速：片段没设过就跟全局 */
+function clipVolOf(c) {
+  if (!c || !isFinite(c.vol)) return 1;
+  return clamp(c.vol, 0, 2);
+}
+function clipSpeedOf(c) {
+  if (!c || !isFinite(c.speed) || c.speed <= 0) return baseSpeed;
+  return clamp(c.speed, 0.25, 4);
+}
+function applyMainVolume() {
+  applyElVol(v, clamp(volWant * clipVolOf(clipNow()), 0, 2));
+}
+function applyClipSpeed() {
+  const sp = clipSpeedOf(clipNow());
+  if (Math.abs((v.playbackRate || 1) - sp) > 0.0005) { try { v.playbackRate = sp; } catch (e) {} }
+}
+function applyClipAudio() { applyMainVolume(); applyClipSpeed(); }
 /* ---------------- 播放设置持久化（刷新 / 重开窗口后不用重设） ---------------- */
 const PREF_KEY = 'rp_stage_prefs';
 let prefsLoaded = false;
@@ -390,7 +407,7 @@ function savePrefs() {
   if (!prefsLoaded) return;
   try {
     localStorage.setItem(PREF_KEY, JSON.stringify({
-      vol: volWant, sfxVol: sfxVol, speed: v.playbackRate,
+      vol: volWant, sfxVol: sfxVol, speed: baseSpeed,
       chain: chain, loop: loop, fit: fit
     }));
   } catch (e) {}
@@ -402,7 +419,7 @@ function loadPrefs() {
   if (!p) return;
   if (isFinite(p.vol)) setMainVol(p.vol);
   if (isFinite(p.sfxVol)) setSfxVol(p.sfxVol);
-  if (isFinite(p.speed)) v.playbackRate = clamp(p.speed, 0.25, 4);
+  if (isFinite(p.speed)) { baseSpeed = clamp(p.speed, 0.25, 4); v.playbackRate = baseSpeed; }
   chain = !!p.chain;
   loop = !!p.loop;
   if (p.fit === 'cover' || p.fit === 'contain') { fit = p.fit; applyFit(); }
@@ -424,7 +441,8 @@ for (let i = 0; i < POOL; i++) {
 function setMainVol(x) {
   x = clamp(x, 0, 2);
   volWant = x;
-  if (!applyElVol(v, x) && !ampWarned) {
+  const ok = applyElVol(v, clamp(x * clipVolOf(clipNow()), 0, 2));
+  if (!ok && !ampWarned) {
     ampWarned = true;
     toast('此浏览器不支持超过 100% 的音量，已按 100% 播放');
   }
@@ -560,6 +578,7 @@ function loadAt(i, at) {
       imgEl.style.objectFit = fit;
       imgEl.src = abs;
     }
+    applyClipAudio();
     paint(); sendState();
     return;
   }
@@ -576,6 +595,7 @@ function loadAt(i, at) {
     setTime(Number(at) || 0);
     tryPlay();
   }
+  applyClipAudio();
   paint(); sendState();
 }
 function restartClip() {
@@ -678,6 +698,9 @@ function sendState() {
     vol: volWant,
     muted: !!v.muted,
     speed: v.playbackRate,
+    baseSpeed: baseSpeed,
+    clipVol: clipVolOf(c),
+    clipSpeed: (c && isFinite(c.speed)) ? c.speed : null,
     unlocked: unlocked,
     count: clips.length,
     label: c ? c.label : '',
@@ -859,7 +882,10 @@ function handleCmd(m) {
     case 'sfx': playSfx(m.url, m.label); break;
     case 'sfxStop': stopSfx(m.label); break;
     case 'sfxLoop': sfxLoopCfg[m.label] = !!m.v; applyLoopToSlots(); break;
-    case 'speed': v.playbackRate = clamp(m.x, 0.25, 4); savePrefs(); break;
+    case 'speed':
+      baseSpeed = clamp(m.x, 0.25, 4);
+      { const c = clipNow(); if (!c || !isFinite(c.speed)) v.playbackRate = baseSpeed; }
+      savePrefs(); break;
     case 'chain': chain = !!m.v; savePrefs(); break;
     case 'loop': loop = !!m.v; savePrefs(); break;
     case 'duck': duck = !!m.v; mix(); break;
@@ -947,7 +973,7 @@ function mergeClips(list) {
 /* 片段表一变就广播一次，晚开的大屏 / 控制台才跟得上（exact 是控制台下发的，不再回传，避免打乒乓） */
 let lastClipsSig = '';
 function clipsSig() {
-  return clips.map(function (c) { return c.src + '|' + c.label + '|' + c.kind + '|' + c.dur; }).join(',');
+  return clips.map(function (c) { return c.src + '|' + c.label + '|' + c.kind + '|' + c.dur + '|' + (isFinite(c.vol) ? c.vol : '') + '|' + (isFinite(c.speed) ? c.speed : ''); }).join(',');
 }
 function broadcastClips(force) {
   const s = clipsSig();
@@ -978,6 +1004,7 @@ function setClips(list, exact) {
     loadAt(0, 0);
   } else if (pos >= 0) {
     idx = pos;
+    applyClipAudio();
     sendState();
   } else {
     idx = Math.min(idx, clips.length - 1);
@@ -1157,7 +1184,7 @@ function addMedia(files) {
   /* 还没开播时，别人广播过来的片段表里对本窗口没用的（本地没素材、也不在标准表里）直接丢掉，免得出现幽灵卡片 */
   const head = clips.length ? clips.slice() : (fresh ? [] : base.filter(function (c) { return !!fileMap[keyOf(c.src)] || !!std[keyOf(c.src)]; }));
   clips = head.concat(extra).map(function (c, i) {
-    return { label: pad2(i + 1) + ' · ' + stripNum(c.label), src: c.src, dur: c.dur, kind: c.kind };
+    return { label: pad2(i + 1) + ' · ' + stripNum(c.label), src: c.src, dur: c.dur, kind: c.kind, vol: c.vol, speed: c.speed };
   });
   useMap = true;
   pendingClips = null;
@@ -1318,7 +1345,7 @@ function getSfxDefs() {
 function prefsOut() {
   return {
     vol: volWant, muted: !!muteUser, duck: duck, quiet: quiet, chain: chain, loop: loop,
-    speed: v.playbackRate, sfxVol: sfxVol, black: black, fit: fit,
+    speed: baseSpeed, sfxVol: sfxVol, black: black, fit: fit,
     ab: { on: ab.on, a: ab.a, b: ab.b },
     sfxLoops: Object.keys(sfxLoopCfg).filter(function (k) { return sfxLoopCfg[k]; })
   };
@@ -1337,7 +1364,7 @@ async function exportZip(consolePrefs) {
     try {
       const path = 'videos/' + pad2(i + 1) + '_' + e.file.name;
       entries.push({ path: path, data: new Uint8Array(await e.file.arrayBuffer()) });
-      cfg.clips.push({ file: e.file.name, path: path, type: guessType(e.file.name), label: stripNum(c.label), duration: isFinite(c.dur) ? c.dur : null });
+      cfg.clips.push({ file: e.file.name, path: path, type: guessType(e.file.name), label: stripNum(c.label), duration: isFinite(c.dur) ? c.dur : null, vol: clipVolOf(c), speed: (isFinite(c.speed) && c.speed > 0) ? c.speed : null });
       n++;
     } catch (err) { toast('跳过 ' + e.file.name + '（读不出来）'); }
   }
@@ -1372,7 +1399,7 @@ async function exportZip(consolePrefs) {
 function applyPrefs(p) {
   if (!p) return;
   if (isFinite(p.vol)) setMainVol(p.vol);
-  if (isFinite(p.speed)) v.playbackRate = clamp(p.speed, 0.25, 4);
+  if (isFinite(p.speed)) baseSpeed = clamp(p.speed, 0.25, 4);
   if (isFinite(p.sfxVol)) setSfxVol(p.sfxVol);
   muteUser = !!p.muted; duck = !!p.duck; quiet = !!p.quiet;
   chain = !!p.chain; loop = !!p.loop;
@@ -1381,6 +1408,7 @@ function applyPrefs(p) {
   if (p.ab && p.ab.on && p.ab.a != null) ab = { on: true, a: p.ab.a, b: p.ab.b };
   if (Array.isArray(p.sfxLoops)) p.sfxLoops.forEach(function (lb) { sfxLoopCfg[lb] = true; });
   applyLoopToSlots();
+  applyClipAudio();
   mix(); paint(); sendState();
 }
 async function importZip(file) {
@@ -1406,7 +1434,7 @@ async function importZip(file) {
   vids.forEach(function (x) { const k = keyOf(x.name); if (!byKey[k]) byKey[k] = x; });
   const out = [], seen = Object.create(null), extra = [];
   let skip = 0;
-  const pushClip = function (nm, label, dur, isImg, data) {
+  const pushClip = function (nm, label, dur, isImg, data, vol, speed) {
     const k = keyOf(nm);
     if (!k || seen[k]) return;
     seen[k] = 1;
@@ -1415,7 +1443,9 @@ async function importZip(file) {
       label: stripNum(label || nm.replace(/\.[^.]+$/, '')),
       src: 'media/' + nm,
       dur: (typeof dur === 'number' && isFinite(dur)) ? dur : (isImg ? imgHold : null),
-      kind: isImg ? 'image' : 'video'
+      kind: isImg ? 'image' : 'video',
+      vol: (typeof vol === 'number' && isFinite(vol) && vol >= 0) ? vol : undefined,
+      speed: (typeof speed === 'number' && isFinite(speed) && speed > 0) ? speed : undefined
     });
   };
   if (cfg && Array.isArray(cfg.clips) && cfg.clips.length) {
@@ -1429,7 +1459,7 @@ async function importZip(file) {
       const std = stdByKey[k];
       const dur = (typeof c.duration === 'number' && isFinite(c.duration)) ? c.duration
         : (std && typeof std.dur === 'number' && isFinite(std.dur) ? std.dur : null);
-      pushClip(nm, c.label, dur, isImg, hit.data);
+      pushClip(nm, c.label, dur, isImg, hit.data, c.vol, c.speed);
     });
   } else {
     vids.slice().sort(function (a, b) { return a.path < b.path ? -1 : 1; }).forEach(function (x) {
@@ -1446,7 +1476,7 @@ async function importZip(file) {
     extra.push({ label: stripNum(x.name.replace(/\.[^.]+$/, '')), src: 'media/' + x.name, dur: isImg ? imgHold : null, kind: isImg ? 'image' : 'video' });
   });
   const head = out.length ? out : [];
-  clips = head.map(function (c, i) { return { label: pad2(i + 1) + ' · ' + stripNum(c.label), src: c.src, dur: c.dur, kind: c.kind }; })
+  clips = head.map(function (c, i) { return { label: pad2(i + 1) + ' · ' + stripNum(c.label), src: c.src, dur: c.dur, kind: c.kind, vol: c.vol, speed: c.speed }; })
     .concat(extra.map(function (c, i) { return { label: pad2(head.length + i + 1) + ' · ' + c.label, src: c.src, dur: c.dur, kind: c.kind }; }));
   skip = extra.length;
   if (!clips.length) throw new Error('包里的素材认不出来');
@@ -1518,7 +1548,8 @@ window.__dbg = function () {
     idx: idx, count: clips.length, label: c ? c.label : '',
     paused: imgMode ? imgPaused : v.paused, playing: isPlaying(),
     time: imgMode ? imgTime() : v.currentTime, dur: imgMode ? imgLimit() : (isFinite(v.duration) ? v.duration : (c ? c.dur : 0)),
-    vol: volWant, muted: !!v.muted, speed: v.playbackRate,
+    vol: volWant, muted: !!v.muted, speed: v.playbackRate, baseSpeed: baseSpeed,
+    clipVol: clipVolOf(c), clipSpeed: (c && isFinite(c.speed)) ? c.speed : null,
     amp: amp.items.has(v) ? amp.items.get(v).gain.value : null, ampState: amp.ctx ? amp.ctx.state : null,
     sfxAmp: (function () { const s = activeSlots()[0]; return s && amp.items.has(s.el) ? amp.items.get(s.el).gain.value : null; })(),
     unlocked: unlocked, quiet: quiet, duck: duck, chain: chain, loop: loop,

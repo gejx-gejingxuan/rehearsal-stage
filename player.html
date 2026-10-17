@@ -6,6 +6,7 @@
 <style>
   *{box-sizing:border-box}
   html,body{margin:0;height:100%;overflow:hidden;background:#000;font:14px/1.5 'Microsoft YaHei',system-ui,sans-serif}
+  body.hidecursor,body.hidecursor *{cursor:none!important}
   #stage{position:fixed;inset:0;background:#000;overflow:hidden}
   #v{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000;z-index:0}
   #img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000;z-index:0}
@@ -382,6 +383,30 @@ function applyElVol(el, x) {
   el.volume = x;
   return true;
 }
+/* ---------------- 播放设置持久化（刷新 / 重开窗口后不用重设） ---------------- */
+const PREF_KEY = 'rp_stage_prefs';
+let prefsLoaded = false;
+function savePrefs() {
+  if (!prefsLoaded) return;
+  try {
+    localStorage.setItem(PREF_KEY, JSON.stringify({
+      vol: volWant, sfxVol: sfxVol, speed: v.playbackRate,
+      chain: chain, loop: loop, fit: fit
+    }));
+  } catch (e) {}
+}
+function loadPrefs() {
+  let p = null;
+  try { p = JSON.parse(localStorage.getItem(PREF_KEY) || 'null'); } catch (e) {}
+  prefsLoaded = true;
+  if (!p) return;
+  if (isFinite(p.vol)) setMainVol(p.vol);
+  if (isFinite(p.sfxVol)) setSfxVol(p.sfxVol);
+  if (isFinite(p.speed)) v.playbackRate = clamp(p.speed, 0.25, 4);
+  chain = !!p.chain;
+  loop = !!p.loop;
+  if (p.fit === 'cover' || p.fit === 'contain') { fit = p.fit; applyFit(); }
+}
 let lastSfxLabel = null;
 
 for (let i = 0; i < POOL; i++) {
@@ -403,6 +428,7 @@ function setMainVol(x) {
     ampWarned = true;
     toast('此浏览器不支持超过 100% 的音量，已按 100% 播放');
   }
+  savePrefs();
 }
 function applySfxVol(s, x) {
   x = clamp(x, 0, 2);
@@ -497,6 +523,7 @@ function setSfxVol(x) {
     if (!s.el.src) return;
     if (s.el.paused) applySfxVol(s, sfxVol); else fadeTo(s, sfxVol, 110);
   });
+  savePrefs();
 }
 
 /* ---------------- 播放核心 ---------------- */
@@ -832,9 +859,9 @@ function handleCmd(m) {
     case 'sfx': playSfx(m.url, m.label); break;
     case 'sfxStop': stopSfx(m.label); break;
     case 'sfxLoop': sfxLoopCfg[m.label] = !!m.v; applyLoopToSlots(); break;
-    case 'speed': v.playbackRate = clamp(m.x, 0.25, 4); break;
-    case 'chain': chain = !!m.v; break;
-    case 'loop': loop = !!m.v; break;
+    case 'speed': v.playbackRate = clamp(m.x, 0.25, 4); savePrefs(); break;
+    case 'chain': chain = !!m.v; savePrefs(); break;
+    case 'loop': loop = !!m.v; savePrefs(); break;
     case 'duck': duck = !!m.v; mix(); break;
     case 'quiet': quiet = !!m.v; paint(); break;
     case 'fullscreen': toggleFs(!!m.on); break;
@@ -843,7 +870,7 @@ function handleCmd(m) {
     case 'black': black = !!m.v; blackEl.style.display = black ? 'block' : 'none'; osd(black ? '黑场' : '恢复画面', 800); paint(); break;
     case 'export': exportZip(m.prefs); break;
     case 'import': $('#fileZip').click(); break;
-    case 'fit': fit = (m.mode === 'cover') ? 'cover' : 'contain'; applyFit(); osd(fit === 'cover' ? '画面铺满' : '原始比例', 800); paint(); break;
+    case 'fit': fit = (m.mode === 'cover') ? 'cover' : 'contain'; applyFit(); savePrefs(); osd(fit === 'cover' ? '画面铺满' : '原始比例', 800); paint(); break;
     case 'meters': setMeters(!!m.v); break;
     case 'addFiles': pickOnPlayer('files'); break;
     case 'addFolder': pickOnPlayer('folder'); break;
@@ -929,7 +956,16 @@ function broadcastClips(force) {
   send({ k: 'clips', list: clips });
 }
 function setClips(list, exact) {
-  if (!Array.isArray(list) || !list.length) return;
+  if (!Array.isArray(list)) return;
+  if (!list.length) {   /* 清空片段表时大屏也跟着清 */
+    clips = []; idx = 0; imgMode = false; imgPaused = false;
+    try { v.pause(); } catch (e) {}
+    try { v.removeAttribute('src'); v.load(); } catch (e) {}
+    imgEl.style.display = 'none';
+    try { imgEl.removeAttribute('src'); } catch (e) {}
+    paint(); sendState();
+    return;
+  }
   if (!booted) { pendingClips = list; return; }
   const first = !clips.length;
   const cur = clips[idx] ? clips[idx].src : null;
@@ -966,6 +1002,45 @@ hint.addEventListener('click', function (e) {
   unlockNow();
 });
 
+/* ---------------- 画面鼠标操作（与老版一致） ---------------- */
+document.addEventListener('click', function (e) {
+  if (!unlocked || e.altKey) return;   /* Alt+左/右键是切段，不切播放状态 */
+  const t = e.target;
+  if (t !== v && t !== imgEl && t !== document.getElementById('stage')) return;
+  togglePlay();
+});
+document.addEventListener('dblclick', function (e) {
+  if (!unlocked) return;
+  const t = e.target;
+  if (t !== v && t !== imgEl && t !== document.getElementById('stage')) return;
+  e.preventDefault();
+  toggleFs(!document.fullscreenElement);
+});
+document.addEventListener('wheel', function (e) {
+  if (!unlocked) return;
+  e.preventDefault();
+  setMainVol(volWant + (e.deltaY > 0 ? -0.05 : 0.05));
+  osd('音量 ' + Math.round(volWant * 100) + '%', 700);
+}, { passive: false });
+window.addEventListener('mousedown', function (e) {
+  if (!e.altKey || !unlocked || !clips.length) return;
+  if (e.button === 0) { e.preventDefault(); stepClip(-1); }
+  else if (e.button === 2) { e.preventDefault(); stepClip(1); }
+});
+window.addEventListener('contextmenu', function (e) { if (e.altKey) e.preventDefault(); });
+
+/* 全屏时鼠标静止 2.6 秒自动隐藏 */
+let cursorTimer = null;
+function armCursorHide() {
+  clearTimeout(cursorTimer);
+  if (!document.fullscreenElement) { document.body.classList.remove('hidecursor'); return; }
+  document.body.classList.remove('hidecursor');
+  cursorTimer = setTimeout(function () {
+    if (document.fullscreenElement) document.body.classList.add('hidecursor');
+  }, 2600);
+}
+document.addEventListener('mousemove', armCursorHide);
+document.addEventListener('fullscreenchange', armCursorHide);
 /* ---------------- 键盘 ---------------- */
 document.addEventListener('keydown', function (e) {
   const k = e.key;
@@ -1421,6 +1496,7 @@ function withTimeout(p, ms, back) {
 }
 
 (function boot() {
+  loadPrefs();
   const get = fetch('clips.json', { cache: 'no-store' })
     .then(function (r) { if (!r.ok) throw new Error('clips.json ' + r.status); return r.json(); })
     .catch(function () { return null; });

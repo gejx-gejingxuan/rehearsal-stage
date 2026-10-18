@@ -37,18 +37,18 @@
   <div id="hint">
     <div class="hbox" id="hintStart">点击画面开始<small class="hs">一次点击同时解锁声音与全屏，之后交给控制台遥控</small></div>
     <div class="hbox" id="hintPick" style="display:none">
-      先选择视频 / 图片素材
-      <small class="hs">选一次 <b>win7-video</b> 文件夹即可；也可以把文件夹、视频、图片直接拖进这个窗口。<br>以后再想加新视频 / 图片：随时拖进来，或点右下角「＋ 素材」。<br>素材只在本机读取，不会上传到任何服务器。</small>
+      先选择视频 / 图片 / 音频素材
+      <small class="hs">选一次 <b>win7-video</b> 文件夹即可；也可以把文件夹、视频、图片、音频直接拖进这个窗口。<br>以后再想加新视频 / 图片 / 音频：随时拖进来，或点右下角「＋ 素材」。<br>素材只在本机读取，不会上传到任何服务器。</small>
       <div class="picks">
         <button id="pickFolder">选择视频文件夹</button>
-        <button id="pickFiles">选择视频 / 图片（可多选）</button>
+        <button id="pickFiles">选择视频 / 图片 / 音频（可多选）</button>
         <button id="pickZip">导入排练包（zip）</button>
       </div>
       <div class="hs" id="pickMsg" style="color:#ffb8b8"></div>
     </div>
   </div>
   <input type="file" id="fileFolder" webkitdirectory directory multiple style="display:none">
-<input type="file" id="fileFiles" accept="video/*,image/*,.png,.jpg,.jpeg,.gif,.webp,.bmp,.avif" multiple style="display:none">
+<input type="file" id="fileFiles" accept="video/*,image/*,audio/*,.png,.jpg,.jpeg,.gif,.webp,.bmp,.avif,.mp3,.m4a,.wav,.ogg,.oga,.flac,.aac,.opus,.weba" multiple style="display:none">
 <input type="file" id="fileZip" accept=".zip,application/zip" style="display:none">
 </div>
 <script>
@@ -340,6 +340,26 @@ const POOL = 4;
 const pool = [];
 let sfxVol = 1;
 const sfxLoopCfg = {};
+
+/* 音效清单：默认来自 sfx.json，用户拖进来的音频直接追加到这里 */
+let sfxItems = [];
+let sfxDefs = null;
+let lastSfxSig = '';
+function isAudioName(n) { return /\.(mp3|m4a|wav|ogg|oga|flac|aac|opus|weba)$/i.test(String(n || '')); }
+function sfxSigOf(list) {
+  return (list || []).map(function (x) { return (x.label || '') + '|' + (x.src || ''); }).join('\n');
+}
+function broadcastSfx(force) {
+  const s = sfxSigOf(sfxItems);
+  if (!force && s === lastSfxSig) return;
+  lastSfxSig = s;
+  send({ k: 'sfxlist', list: sfxItems });
+}
+function uniqueSfxLabel(base) {
+  let lb = base, n = 2;
+  while (sfxItems.some(function (x) { return x.label === lb; })) lb = base + ' (' + (n++) + ')';
+  return lb;
+}
 
 /* ---------------- 超过 100% 的音量：元素 volume 上限是 1，多出来的用 Web Audio 增益补足 ---------------- */
 let volWant = 1, baseSpeed = 1, ampWarned = false;
@@ -933,6 +953,7 @@ bc.onmessage = function (e) {
     lastConsoleAt = Date.now();
     sendState();
     if (clips.length) broadcastClips(true);
+    broadcastSfx(true);
     sendThumbsAll(); syncThumbs();
     return;
   }
@@ -1117,6 +1138,7 @@ schedulePreview();
 setInterval(imgTick, 120);
 setInterval(meterTick, 120);
 send({ k: 'hello' });
+loadSfxDefaults();
 
 /* ---------------- 素材载入（部署版：选一次文件夹即可） ---------------- */
 const FALLBACK_CLIPS = [
@@ -1145,7 +1167,7 @@ function pickOnPlayer(kind) {
 }
 function mediaFiles(files) {
   const out = [];
-  const re = /\.(mp4|m4v|mov|webm|mkv|avi|mpg|mpeg|ts|jpg|jpeg|png|gif|webp|bmp|avif)$/i;
+  const re = /\.(mp4|m4v|mov|webm|mkv|avi|mpg|mpeg|ts|jpg|jpeg|png|gif|webp|bmp|avif|mp3|m4a|wav|ogg|oga|flac|aac|opus|weba)$/i;
   for (let i = 0; i < (files || []).length; i++) {
     const f = files[i];
     if (f && f.name && re.test(f.name)) out.push(f);
@@ -1160,10 +1182,42 @@ function releaseMap() {
   clearThumbs();
 }
 
-/* 素材载入 / 增量导入：名字对上原表就补素材，对不上的按顺序追加成新片段（视频或图片） */
+/* 音频：加进音效板，不进片段表。名字已存在时只绑定本地文件，不重复加按钮 */
+function addAudio(files) {
+  let added = 0, dup = 0;
+  (files || []).forEach(function (f) {
+    if (!f || !f.name || !isAudioName(f.name)) return;
+    const k = keyOf(f.name);
+    const hit = sfxItems.filter(function (x) { return keyOf(x.src) === k; })[0] || null;
+    if (fileMap[k] || hit) {
+      if (!fileMap[k]) addFile(f);   /* 同名默认音效：绑定本地文件，播放与打包都走它 */
+      dup++;
+      return;
+    }
+    addFile(f);
+    const lb = uniqueSfxLabel(f.name.replace(/\.[^.]+$/, ''));
+    sfxItems.push({ label: lb, src: 'media/' + f.name, dur: null });
+    added++;
+  });
+  if (added) {
+    broadcastSfx(true);
+    toast('音效：新增 ' + added + ' 个' + (dup ? ' · 跳过已有 ' + dup + ' 个' : ''));
+  } else if (dup) {
+    toast('这些音效已经在列表里了');
+  }
+  return added;
+}
+
+/* 素材载入 / 增量导入：视频 / 图片进片段表，音频进音效板 */
 function addMedia(files) {
-  const list = mediaFiles(files);
-  if (!list.length) { showPick(); pickMsg('这里没有视频 / 图片文件（支持 mp4 / jpg / png / gif / webp）'); toast('没找到视频 / 图片文件'); return; }
+  const all = mediaFiles(files);
+  const audio = all.filter(function (f) { return isAudioName(f.name); });
+  const list = all.filter(function (f) { return !isAudioName(f.name); });
+  if (audio.length) addAudio(audio);
+  if (!list.length) {
+    if (audio.length) return;
+    showPick(); pickMsg('这里没有视频 / 图片 / 音频文件（支持 mp4 / jpg / png / mp3 / wav 等）'); toast('没找到可用的素材文件'); return;
+  }
   const base = (clips.length ? clips.slice() : ((pendingClips && pendingClips.length) ? pendingClips.slice() : FALLBACK_CLIPS.slice()));
   const baseByKey = Object.create(null);
   base.forEach(function (c) { const k = keyOf(c.src); if (!baseByKey[k]) baseByKey[k] = c; });
@@ -1247,10 +1301,10 @@ function onPicked(e) {
 $('#fileFolder').addEventListener('change', onPicked);
 $('#fileFiles').addEventListener('change', onPicked);
 
-/* 拖拽：整个文件夹或一批视频 / 图片直接丢进窗口；已开播后再拖进来＝继续追加 */
+/* 拖拽：整个文件夹或一批视频 / 图片 / 音频直接丢进窗口；已开播后再拖进来＝继续追加 */
 window.addEventListener('dragover', function (e) {
   e.preventDefault();
-  if (!booted) { showPick(); pickMsg('松开即载入（支持整个文件夹，视频与图片都行）'); }
+  if (!booted) { showPick(); pickMsg('松开即载入（支持整个文件夹，视频 / 图片 / 音频都行）'); }
   if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
 });
 window.addEventListener('drop', function (e) {
@@ -1276,7 +1330,7 @@ window.addEventListener('drop', function (e) {
 /* 素材探测：同源已有 media/ 就直接开播（本地样本）；否则要求先选一次素材 */
 /* ---------------- 排练包：导出 / 导入 ZIP（视频只在本机打包，不上传） ---------------- */
 const MEDIA_RE = /\.(mp4|m4v|mov|webm|mkv|avi|ts|jpg|jpeg|png|gif|webp|bmp|avif)$/i;
-const AUDIO_RE = /\.(mp3|m4a|wav|ogg)$/i;
+const AUDIO_RE = /\.(mp3|m4a|wav|ogg|oga|flac|aac|opus|weba)$/i;
 function pad2(n) { return String(n).padStart(2, '0'); }
 const crcTable = (function () {
   const t = new Uint32Array(256);
@@ -1315,6 +1369,10 @@ function guessType(n) {
   if (e === 'm4a') return 'audio/mp4';
   if (e === 'wav') return 'audio/wav';
   if (e === 'ogg') return 'audio/ogg';
+  if (e === 'oga') return 'audio/ogg';
+  if (e === 'flac') return 'audio/flac';
+  if (e === 'aac') return 'audio/aac';
+  if (e === 'opus' || e === 'weba') return 'audio/webm';
   if (e === 'jpg' || e === 'jpeg') return 'image/jpeg';
   if (e === 'png') return 'image/png';
   if (e === 'gif') return 'image/gif';
@@ -1349,12 +1407,26 @@ async function readZipFile(file) {
   }
   return out;
 }
-let sfxDefs = null;
 function getSfxDefs() {
   if (sfxDefs) return Promise.resolve(sfxDefs);
   return fetch('sfx.json', { cache: 'no-store' }).then(function (r) { return r.json(); })
     .then(function (l) { sfxDefs = Array.isArray(l) ? l : []; return sfxDefs; })
     .catch(function () { sfxDefs = []; return sfxDefs; });
+}
+/* 默认音效与用户音频合并；已有同名的只保留用户加进来的那条 */
+function loadSfxDefaults() {
+  return getSfxDefs().then(function (defs) {
+    let changed = false;
+    (defs || []).forEach(function (d) {
+      if (!d || !d.src) return;
+      const k = keyOf(d.src);
+      if (sfxItems.some(function (x) { return keyOf(x.src) === k; })) return;
+      sfxItems.push({ label: d.label || baseName(d.src).replace(/\.[^.]+$/, ''), src: d.src, dur: (d.dur == null ? null : d.dur) });
+      changed = true;
+    });
+    if (changed) broadcastSfx(true);
+    return sfxItems;
+  });
 }
 function prefsOut() {
   return {
@@ -1383,7 +1455,8 @@ async function exportZip(consolePrefs) {
     } catch (err) { toast('跳过 ' + e.file.name + '（读不出来）'); }
   }
   if (!n) { toast('没有可打包的素材'); return; }
-  const defs = await getSfxDefs();
+  await loadSfxDefaults();
+  const defs = sfxItems.slice();
   for (let i = 0; i < defs.length; i++) {
     const s = defs[i];
     const name = baseName(s.src);
@@ -1436,10 +1509,23 @@ async function importZip(file) {
   const stdByKey = Object.create(null);
   FALLBACK_CLIPS.forEach(function (c) { const k = keyOf(c.src); if (!stdByKey[k]) stdByKey[k] = c; });
   releaseMap();
+  const sfxCfg = Object.create(null);
+  if (cfg && Array.isArray(cfg.sfx)) cfg.sfx.forEach(function (s) {
+    const nm = baseName(s.file || s.path || '').replace(/^\d{2,3}_/, '');
+    if (nm) sfxCfg[keyOf(nm)] = s;
+  });
+  const importedSfx = [];
   const vids = [];
   map.forEach(function (data, path) {
     const name = baseName(path);
-    if (AUDIO_RE.test(name)) { const an = name.replace(/^\d{2,3}_/, ''); if (!fileMap[keyOf(an)]) addFile(new File([data], an, { type: guessType(an) })); return; }
+    if (AUDIO_RE.test(name)) {
+      const an = name.replace(/^\d{2,3}_/, '');
+      if (!fileMap[keyOf(an)]) addFile(new File([data], an, { type: guessType(an) }));
+      const meta = sfxCfg[keyOf(an)] || null;
+      const lb = (meta && meta.label) ? String(meta.label) : an.replace(/\.[^.]+$/, '');
+      if (!importedSfx.some(function (x) { return keyOf(x.src) === keyOf(an); })) importedSfx.push({ label: lb, src: 'media/' + an, dur: null });
+      return;
+    }
     if (MEDIA_RE.test(name)) vids.push({ name: name.replace(/^\d{2,3}_/, ''), data: data, path: path });
   });
   if (!vids.length) throw new Error('包里没有视频 / 图片文件');
@@ -1503,6 +1589,8 @@ async function importZip(file) {
   pickMsg('');
   loadAt(0, 0);
   broadcastClips(true);
+  sfxItems = importedSfx.slice();
+  if (!sfxItems.length) loadSfxDefaults(); else broadcastSfx(true);
   applyPrefs(cfg && cfg.prefs);
   syncThumbs();
   if (cfg && cfg.console) send({ k: 'prefs', prefs: cfg.console });
@@ -1569,6 +1657,7 @@ window.__dbg = function () {
     unlocked: unlocked, quiet: quiet, duck: duck, chain: chain, loop: loop,
     ab: { on: ab.on, a: ab.a, b: ab.b },
     sfxPlaying: anySfx(), sfxLabel: lastSfxLabel, sfxActive: activeLabels(),
+    sfxItems: sfxItems.map(function (x) { return x.label + '|' + x.src; }),
     sfxProg: sfxProgress(),
     sfxVol: sfxVol, sfxLoop: Object.assign({}, sfxLoopCfg),
     fs: !!document.fullscreenElement, fit: fit, black: black, fps: fps,

@@ -294,8 +294,12 @@
         <h2 class="sfx">音效板 SFX <em>点了立即在大屏响；4 条通道可同时响，再点一次＝停该条</em></h2>
         <div class="row" id="sfxRow"></div>
         <div id="sfxProg" style="display:none"></div>
+        <div class="row" style="margin-top:9px">
+          <button id="bAddSfx" title="选择音频文件，直接加到这块音效板">＋ 音效</button>
+          <span class="lab" style="min-width:0;color:var(--ink3)">支持 mp3 / wav / m4a / ogg / flac；也可以直接拖进本窗口</span>
+        </div>
         <div class="row" id="sfxLoopRow" style="margin-top:9px"><span class="lab">循环</span></div>
-        <div class="hintline">勾选「循环」后该音效持续循环，再点一次停止。键盘 <kbd>X</kbd> 随时全停。</div>
+        <div class="hintline">勾选「循环」后该音效持续循环，再点一次停止。键盘 <kbd>X</kbd> 随时全停。自定义音效会随排练包一起导出。</div>
       </div>
     </div>
   </div>
@@ -303,7 +307,7 @@
   <div class="card" style="margin-top:12px">
     <h2 class="cue">片段 CUE STACK <em>横向排列可滚动；点一下＝切到该片段，拖动卡片改顺序，右上角 × 删除</em></h2>
     <div id="strip"></div>
-    <input type="file" id="cfFiles" accept="video/*,image/*,.png,.jpg,.jpeg,.gif,.webp,.bmp,.avif" multiple style="display:none">
+    <input type="file" id="cfFiles" accept="video/*,image/*,audio/*,.png,.jpg,.jpeg,.gif,.webp,.bmp,.avif,.mp3,.m4a,.wav,.ogg,.oga,.flac,.aac,.opus,.weba" multiple style="display:none">
     <input type="file" id="cfFolder" webkitdirectory directory multiple style="display:none">
     <input type="file" id="cfZip" accept=".zip,application/zip" style="display:none">
     <div class="row">
@@ -402,6 +406,7 @@ const SEG = 26;
 let clips = [];
 let thumbMap = Object.create(null);   /* src -> 缩略图（播放端抽好发过来） */
 let sfxList = [];
+let sfxListSig = '';
 let order = [];
 let idx = -1;
 let st = null;
@@ -870,6 +875,7 @@ bc.onmessage = function (e) {
   }
   if (m.k === 'toast') { toast('播放端：' + m.text); return; }
   if (m.k === 'clips' && Array.isArray(m.list) && m.list.length) { applyIncomingClips(m.list); return; }
+  if (m.k === 'sfxlist' && Array.isArray(m.list)) { applySfxList(m.list); return; }
   if (m.k === 'prefs') { applyConsolePrefs(m.prefs); return; }
   if (m.k === 'thumbs') { applyThumbs(m); return; }
   if (m.k === 'hello') { sendClips(); send({ k: 'hello' }); pushPreview(); if (meterWant) send({ k: 'cmd', action: 'meters', v: true }); return; }
@@ -1055,9 +1061,10 @@ function sendPickedFiles(e) {
   e.target.value = '';
   if (!picked.length) return;
   send({ k: 'files', files: picked });
-  toast('已送出 ' + picked.length + ' 个素材，大屏窗口会接着编号');
+  toast('已送出 ' + picked.length + ' 个素材（视频 / 图片 / 音频），大屏会接着处理');
 }
 $('#bAddFiles').onclick = function () { $('#cfFiles').click(); };
+$('#bAddSfx').onclick = function () { $('#cfFiles').click(); };
 $('#bAddFolder').onclick = function () { $('#cfFolder').click(); };
 $('#cfFiles').addEventListener('change', sendPickedFiles);
 $('#cfFolder').addEventListener('change', sendPickedFiles);
@@ -1078,6 +1085,16 @@ $('#imgAuto').addEventListener('change', function () { cmd({ action: 'imgAuto', 
 $('#thumbOn').addEventListener('change', function () { cmd({ action: 'thumbs', v: $('#thumbOn').checked }); });
 
 /* ---------- 音效板 ---------- */
+function sfxSigOf(list) { return (list || []).map(function (s) { return (s.label || '') + '|' + (s.src || ''); }).join('\n'); }
+function applySfxList(list) {
+  if (!Array.isArray(list)) return;
+  const clean = list.filter(function (s) { return s && s.src; });
+  const sig = sfxSigOf(clean);
+  if (sig === sfxListSig) return;
+  sfxListSig = sig;
+  sfxList = clean;
+  renderSfx();
+}
 function renderSfx() {
   const row = $('#sfxRow');
   const lrow = $('#sfxLoopRow');
@@ -1113,6 +1130,12 @@ function renderSfx() {
     wrap.appendChild(cb); wrap.appendChild(t);
     lrow.appendChild(wrap);
   });
+  if (!sfxList.length) {
+    const em = document.createElement('span');
+    em.className = 'hintline'; em.style.marginTop = '0';
+    em.textContent = '还没有音效，点「＋ 音效」或把音频拖进本窗口';
+    row.appendChild(em);
+  }
 }
 
 /* 音效播放进度：0.5s 一次状态，60ms 插值刷新，进度条平滑走 */
@@ -1290,7 +1313,7 @@ window.addEventListener('drop', function (e) {
   if (!files.length) return;
   e.preventDefault();
   send({ k: 'files', files: files });
-  toast('已送出 ' + files.length + ' 个素材，大屏窗口会接着编号');
+  toast('已送出 ' + files.length + ' 个素材（视频 / 图片 / 音频），大屏会接着处理');
 });
 function keyOffset(k) { return k === '0' ? 5 : (parseInt(k, 10) - 5); }
 function jumpRel(off) {
@@ -1374,6 +1397,7 @@ document.addEventListener('keydown', function (e) {
 fetch('sfx.json', { cache: 'no-store' }).then(function (r) { return r.json(); }).catch(function () { return []; })
 .then(function (res) {
   sfxList = res || [];
+  sfxListSig = sfxSigOf(sfxList);
   clips = []; order = []; sel = -1; gridSig = '';
   renderGrid(); renderSfx();
   send({ k: 'hello' });

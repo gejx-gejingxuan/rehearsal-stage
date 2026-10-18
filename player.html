@@ -465,6 +465,19 @@ function activeLabels() {
   return out;
 }
 function anySfx() { return activeSlots().length > 0; }
+function sfxProgress() {
+  const out = [];
+  pool.forEach(function (s) {
+    if (!s.label || !s.el.src || s.el.paused || s.el.ended) return;
+    out.push({
+      label: s.label,
+      t: s.el.currentTime || 0,
+      d: isFinite(s.el.duration) ? s.el.duration : 0,
+      loop: !!s.el.loop
+    });
+  });
+  return out;
+}
 function mix() { v.muted = !!muteUser || (!!duck && anySfx()); }
 
 function fadeTo(s, target, ms) {
@@ -712,6 +725,7 @@ function sendState() {
     sfxPlaying: anySfx(),
     sfxLabel: lastSfxLabel,
     sfxActive: activeLabels(),
+    sfxProg: sfxProgress(),
     sfxLoops: Object.keys(sfxLoopCfg).filter(function (k) { return sfxLoopCfg[k]; }),
     fps: fps,
     fit: fit,
@@ -1555,6 +1569,7 @@ window.__dbg = function () {
     unlocked: unlocked, quiet: quiet, duck: duck, chain: chain, loop: loop,
     ab: { on: ab.on, a: ab.a, b: ab.b },
     sfxPlaying: anySfx(), sfxLabel: lastSfxLabel, sfxActive: activeLabels(),
+    sfxProg: sfxProgress(),
     sfxVol: sfxVol, sfxLoop: Object.assign({}, sfxLoopCfg),
     fs: !!document.fullscreenElement, fit: fit, black: black, fps: fps,
     metersOn: meter.on, meterOk: !!meter.ok, meterV: meter.v, meterS: meter.s,

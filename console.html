@@ -61,8 +61,9 @@
   button:active{transform:translateY(1px)}
   button.on{border-color:var(--amber);color:var(--amber);background:rgba(255,176,32,.12);font-weight:600}
   button.warnon{border-color:var(--amber);color:#0c0e12;background:var(--amber);font-weight:700}
-  button.sfx{padding:9px 15px;font-size:13.5px}
-  button.sfx.dragging{opacity:.4}
+  button.sfx{display:inline-flex;align-items:center;gap:7px;padding:9px 15px;font-size:13.5px;cursor:grab}
+  button.sfx::before{content:'\2807';font-size:11px;color:var(--ink3);letter-spacing:-1px}
+  button.sfx.dragging{cursor:grabbing;opacity:.4}
   button.sfx.dropL{box-shadow:inset 3px 0 0 var(--cyan)}
   button.sfx.dropR{box-shadow:inset -3px 0 0 var(--cyan)}
   #sfxRow.dragover{outline:1px dashed var(--cyan);outline-offset:2px}
@@ -70,10 +71,11 @@
   .sfxp{display:flex;align-items:center;gap:8px;margin-top:5px}
   .sfxp .nm{width:150px;font-size:11.5px;color:var(--ink2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .sfxp .lp{flex:0 0 auto;font-size:10px;color:var(--cyan);border:1px solid var(--cyan);border-radius:3px;padding:0 4px;line-height:1.4}
-  .sfxp .track{flex:1;position:relative;height:9px;background:var(--sunk);border:1px solid var(--line);border-radius:5px;overflow:hidden;cursor:pointer;touch-action:none}
+  .sfxp .track{flex:1;position:relative;height:9px;background:var(--sunk);border:1px solid var(--line);border-radius:5px;cursor:grab;touch-action:none}
   .sfxp .track:hover{border-color:var(--amber)}
-  .sfxp .track.seeking{box-shadow:0 0 0 2px rgba(255,176,32,.25)}
-  .sfxp .track i{display:block;height:100%;width:0;background:var(--amber)}
+  .sfxp .track.seeking{cursor:grabbing;box-shadow:0 0 0 2px rgba(255,176,32,.25)}
+  .sfxp .track i{display:block;height:100%;width:0;background:var(--amber);border-radius:4px 0 0 4px}
+  .sfxp .track b{position:absolute;top:50%;left:0;width:11px;height:18px;margin-left:-5.5px;transform:translateY(-50%);border-radius:3px;background:var(--amber);border:1px solid #7a5510;box-shadow:0 0 7px rgba(255,176,32,.5);pointer-events:none}
   .sfxp .tm{flex:0 0 auto;font-family:var(--mono);font-size:11px;color:var(--ink3);text-align:right;min-width:94px}
   button.go{min-width:104px;font-size:15px;font-weight:700;color:#04120a;background:var(--green);border-color:#1ea855;letter-spacing:1px}
   button.go:hover{background:#43f07f;border-color:#43f07f}
@@ -1235,6 +1237,7 @@ function paintSfxProgress() {
       const tr = document.createElement('div');
       tr.className = 'track';
       tr.appendChild(document.createElement('i'));
+      tr.appendChild(document.createElement('b'));
       row.appendChild(tr);
       const tm = document.createElement('span');
       tm.className = 'tm';
@@ -1254,6 +1257,8 @@ function paintSfxProgress() {
     const pct = d > 0 ? Math.max(0, Math.min(100, t / d * 100)) : 0;
     const bar = row.querySelector('.track i');
     if (bar) bar.style.width = pct.toFixed(2) + '%';
+    const knob = row.querySelector('.track b');
+    if (knob) knob.style.left = pct.toFixed(2) + '%';
     const tm = row.querySelector('.tm');
     if (tm) tm.textContent = fmt(t) + (d > 0 ? (' / ' + fmt(d)) : ' / --:--');
   });
@@ -1272,6 +1277,8 @@ function sfxSeekAt(e, track) {
   const ratio = r.width > 0 ? Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) : 0;
   const bar = track.querySelector('i');
   if (bar) bar.style.width = (ratio * 100).toFixed(2) + '%';
+  const knob = track.querySelector('b');
+  if (knob) knob.style.left = (ratio * 100).toFixed(2) + '%';
   if (x && d > 0) {
     const t = x.loop ? Math.min(ratio * d, Math.max(0, d - 0.05)) : ratio * d;
     x.t = t; sfxProgAt = Date.now();

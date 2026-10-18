@@ -347,7 +347,7 @@ let sfxDefs = null;
 let lastSfxSig = '';
 function isAudioName(n) { return /\.(mp3|m4a|wav|ogg|oga|flac|aac|opus|weba)$/i.test(String(n || '')); }
 function sfxSigOf(list) {
-  return (list || []).map(function (x) { return (x.label || '') + '|' + (x.src || ''); }).join('\n');
+  return (list || []).map(function (x) { return (x.label || '') + '|' + (x.src || '') + '|' + (isFinite(x.vol) ? x.vol : 1); }).join('\n');
 }
 function broadcastSfx(force) {
   const s = sfxSigOf(sfxItems);
@@ -355,6 +355,15 @@ function broadcastSfx(force) {
   lastSfxSig = s;
   send({ k: 'sfxlist', list: sfxItems });
 }
+function sfxItemOf(label) {
+  for (let i = 0; i < sfxItems.length; i++) if (sfxItems[i].label === label) return sfxItems[i];
+  return null;
+}
+function sfxVolOf(label) {
+  const it = sfxItemOf(label);
+  return it && isFinite(it.vol) ? clamp(it.vol, 0, 2) : 1;
+}
+
 function uniqueSfxLabel(base) {
   let lb = base, n = 2;
   while (sfxItems.some(function (x) { return x.label === lb; })) lb = base + ' (' + (n++) + ')';
@@ -532,7 +541,7 @@ function playSfx(url, label) {
   try { el.currentTime = 0; } catch (e) {}
   const p = el.play();
   if (p && p.catch) p.catch(function () { toast('音效播放失败：' + label); });
-  fadeTo(s, sfxVol, 200);
+  fadeTo(s, clamp(sfxVol * sfxVolOf(label), 0, 2), 200);
   lastSfxLabel = label;
   mix(); paint();
   osd('\u266A ' + label, 900);
@@ -559,6 +568,46 @@ function seekSfx(label, t, ratio) {
   return true;
 }
 
+function updateSfxItem(label, patch) {
+  const it = sfxItemOf(label);
+  if (!it) return false;
+  const old = it.label;
+  if (patch && typeof patch.label === 'string') {
+    let nm = patch.label.trim();
+    if (nm && nm !== old) {
+      let base = nm, n = 2;
+      while (sfxItems.some(function (x) { return x !== it && x.label === base; })) base = nm + ' (' + (n++) + ')';
+      it.label = base;
+      if (Object.prototype.hasOwnProperty.call(sfxLoopCfg, old)) {
+        sfxLoopCfg[base] = !!sfxLoopCfg[old];
+        delete sfxLoopCfg[old];
+      }
+      pool.forEach(function (s) { if (s.label === old) s.label = base; });
+      if (lastSfxLabel === old) lastSfxLabel = base;
+    }
+  }
+  if (patch && isFinite(patch.vol)) it.vol = clamp(patch.vol, 0, 2);
+  broadcastSfx(true);
+  pool.forEach(function (s) {
+    if (s.label !== it.label || !s.el.src) return;
+    const target = clamp(sfxVol * sfxVolOf(it.label), 0, 2);
+    if (s.el.paused) applySfxVol(s, target); else fadeTo(s, target, 80);
+  });
+  applyLoopToSlots();
+  sendState();
+  return true;
+}
+function deleteSfxItem(label) {
+  let i = -1;
+  for (let n = 0; n < sfxItems.length; n++) if (sfxItems[n].label === label) { i = n; break; }
+  if (i < 0) return false;
+  sfxItems.splice(i, 1);
+  delete sfxLoopCfg[label];
+  stopSfx(label);
+  broadcastSfx(true);
+  sendState();
+  return true;
+}
 function onSfxEnd(el) {
   const s = slotOf(el);
   if (s) {
@@ -592,7 +641,8 @@ function setSfxVol(x) {
   sfxVol = clamp(x, 0, 2);
   pool.forEach(function (s) {
     if (!s.el.src) return;
-    if (s.el.paused) applySfxVol(s, sfxVol); else fadeTo(s, sfxVol, 110);
+    const target = clamp(sfxVol * (s.label ? sfxVolOf(s.label) : 1), 0, 2);
+    if (s.el.paused) applySfxVol(s, target); else fadeTo(s, target, 110);
   });
   savePrefs();
 }
@@ -937,6 +987,8 @@ function handleCmd(m) {
     case 'sfxStop': stopSfx(m.label); break;
     case 'sfxSeek': seekSfx(m.label, m.t, m.r); break;
     case 'sfxLoop': sfxLoopCfg[m.label] = !!m.v; applyLoopToSlots(); break;
+    case 'sfxUpdate': updateSfxItem(m.label, m.patch); break;
+    case 'sfxDelete': deleteSfxItem(m.label); break;
     case 'speed':
       baseSpeed = clamp(m.x, 0.25, 4);
       { const c = clipNow(); if (!c || !isFinite(c.speed)) v.playbackRate = baseSpeed; }
@@ -1230,7 +1282,7 @@ function addAudio(files) {
     }
     addFile(f);
     const lb = uniqueSfxLabel(f.name.replace(/\.[^.]+$/, ''));
-    sfxItems.push({ label: lb, src: 'media/' + f.name, dur: null });
+    sfxItems.push({ label: lb, src: 'media/' + f.name, dur: null, vol: 1 });
     added++;
   });
   if (added) {
@@ -1455,7 +1507,7 @@ function loadSfxDefaults() {
       if (!d || !d.src) return;
       const k = keyOf(d.src);
       if (sfxItems.some(function (x) { return keyOf(x.src) === k; })) return;
-      sfxItems.push({ label: d.label || baseName(d.src).replace(/\.[^.]+$/, ''), src: d.src, dur: (d.dur == null ? null : d.dur) });
+      sfxItems.push({ label: d.label || baseName(d.src).replace(/\.[^.]+$/, ''), src: d.src, dur: (d.dur == null ? null : d.dur), vol: 1 });
       changed = true;
     });
     if (changed) broadcastSfx(true);
@@ -1490,7 +1542,8 @@ async function exportZip(consolePrefs) {
   }
   if (!n) { toast('没有可打包的素材'); return; }
   await loadSfxDefaults();
-  const defs = sfxItems.slice();
+  const defs = sfxItems.map(function (x) { return { label: x.label || '', src: x.src || '', dur: (isFinite(x.dur) ? x.dur : null), vol: (isFinite(x.vol) ? clamp(x.vol, 0, 2) : 1) }; });
+  const sfxOut = [];
   for (let i = 0; i < defs.length; i++) {
     const s = defs[i];
     const name = baseName(s.src);
@@ -1502,9 +1555,10 @@ async function exportZip(consolePrefs) {
       if (!data) continue;
       const path = 'sfx/' + pad2(i + 1) + '_' + name;
       entries.push({ path: path, data: data });
-      cfg.sfx.push({ file: name, path: path, label: s.label || name });
+      sfxOut.push({ file: name, path: path, label: s.label || name, duration: s.dur, vol: s.vol, loop: !!sfxLoopCfg[s.label] });
     } catch (err) {}
   }
+  cfg.sfx = sfxOut;
   cfg.prefs = prefsOut();
   entries.push({ path: 'config.json', data: zte.encode(JSON.stringify(cfg)) });
   toast('正在生成 zip（' + entries.length + ' 个文件）…');
@@ -1548,20 +1602,37 @@ async function importZip(file) {
     const nm = baseName(s.file || s.path || '').replace(/^\d{2,3}_/, '');
     if (nm) sfxCfg[keyOf(nm)] = s;
   });
+  const audioByName = Object.create(null);
   const importedSfx = [];
+  const importedKeys = Object.create(null);
   const vids = [];
   map.forEach(function (data, path) {
     const name = baseName(path);
     if (AUDIO_RE.test(name)) {
       const an = name.replace(/^\d{2,3}_/, '');
-      if (!fileMap[keyOf(an)]) addFile(new File([data], an, { type: guessType(an) }));
-      const meta = sfxCfg[keyOf(an)] || null;
-      const lb = (meta && meta.label) ? String(meta.label) : an.replace(/\.[^.]+$/, '');
-      if (!importedSfx.some(function (x) { return keyOf(x.src) === keyOf(an); })) importedSfx.push({ label: lb, src: 'media/' + an, dur: null });
+      const k = keyOf(an);
+      if (!audioByName[k]) audioByName[k] = { name: an, data: data, meta: sfxCfg[k] || null };
       return;
     }
     if (MEDIA_RE.test(name)) vids.push({ name: name.replace(/^\d{2,3}_/, ''), data: data, path: path });
   });
+  Object.keys(sfxLoopCfg).forEach(function (k) { delete sfxLoopCfg[k]; });
+  const pushImportedSfx = function (name, data, meta) {
+    const k = keyOf(name);
+    if (!k || importedKeys[k]) return;
+    importedKeys[k] = 1;
+    if (!fileMap[k]) addFile(new File([data], name, { type: guessType(name) }));
+    const lb = (meta && meta.label) ? String(meta.label) : name.replace(/\.[^.]+$/, '');
+    const vol = (meta && isFinite(meta.vol)) ? clamp(meta.vol, 0, 2) : 1;
+    importedSfx.push({ label: lb, src: 'media/' + name, dur: (meta && isFinite(meta.duration) ? meta.duration : null), vol: vol });
+    if (meta && meta.loop) sfxLoopCfg[lb] = true;
+  };
+  if (cfg && Array.isArray(cfg.sfx)) cfg.sfx.forEach(function (s) {
+    const nm = baseName(s.file || s.path || '').replace(/^\d{2,3}_/, '');
+    const hit = audioByName[keyOf(nm)];
+    if (hit) pushImportedSfx(hit.name, hit.data, s);
+  });
+  Object.keys(audioByName).forEach(function (k) { const x = audioByName[k]; pushImportedSfx(x.name, x.data, x.meta); });
   if (!vids.length) throw new Error('包里没有视频 / 图片文件');
   /* 严格按包内 config.clips 的顺序重建；config 里没记的素材接在最后 */
   const byKey = Object.create(null);
@@ -1691,7 +1762,10 @@ window.__dbg = function () {
     unlocked: unlocked, quiet: quiet, duck: duck, chain: chain, loop: loop,
     ab: { on: ab.on, a: ab.a, b: ab.b },
     sfxPlaying: anySfx(), sfxLabel: lastSfxLabel, sfxActive: activeLabels(),
+    sfxActiveVol: (function () { const s = activeSlots()[0]; return s ? (s.eff == null ? s.el.volume : s.eff) : null; })(),
+    sfxSlots: pool.map(function (s) { return { label: s.label, eff: s.eff, volume: s.el.volume, paused: s.el.paused, src: s.el.src }; }),
     sfxItems: sfxItems.map(function (x) { return x.label + '|' + x.src; }),
+    sfxItemsFull: sfxItems.map(function (x) { return { label: x.label, src: x.src, vol: (isFinite(x.vol) ? x.vol : 1) }; }),
     sfxProg: sfxProgress(),
     sfxVol: sfxVol, sfxLoop: Object.assign({}, sfxLoopCfg),
     fs: !!document.fullscreenElement, fit: fit, black: black, fps: fps,

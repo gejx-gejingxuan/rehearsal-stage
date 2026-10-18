@@ -66,6 +66,8 @@
   button.sfx.dragging{cursor:grabbing;opacity:.4}
   button.sfx.dropL{box-shadow:inset 3px 0 0 var(--cyan)}
   button.sfx.dropR{box-shadow:inset -3px 0 0 var(--cyan)}
+  button.sfx.sel{border-color:var(--cyan);box-shadow:inset 0 0 0 1px var(--cyan)}
+  button.sfx .vb{font-family:var(--mono);font-size:10.5px;color:var(--amber);border:1px solid rgba(255,176,32,.45);border-radius:3px;padding:0 3px;line-height:1.5}
   #sfxRow.dragover{outline:1px dashed var(--cyan);outline-offset:2px}
   #sfxProg{margin-top:10px}
   .sfxp{display:flex;align-items:center;gap:8px;margin-top:5px}
@@ -308,6 +310,15 @@
           <span class="lab" style="min-width:0;color:var(--ink3)">支持 mp3 / wav / m4a / ogg / flac；也可以直接拖进本窗口</span>
         </div>
         <div class="row" id="sfxLoopRow" style="margin-top:9px"><span class="lab">循环</span></div>
+        <div class="row" id="sfxEditRow" style="display:none;margin-top:9px;padding-top:9px;border-top:1px solid var(--line)">
+          <span class="lab" style="color:var(--cyan)">音效编辑</span>
+          <input type="text" id="sfxEditName" title="音效名称" style="width:150px;font:inherit;font-size:12.5px;padding:5px 7px;border:1px solid var(--line2);border-radius:6px;background:var(--sunk);color:var(--ink)">
+          <span class="lab" style="min-width:0">音量</span>
+          <input type="range" id="sfxEditVol" min="0" max="200" value="100" style="width:120px">
+          <span class="mono" id="sfxEditVolLbl" style="width:40px;text-align:right;color:var(--ink2)">100%</span>
+          <label style="display:flex;align-items:center;gap:4px"><input type="checkbox" id="sfxEditLoop">循环</label>
+          <button id="sfxEditDel" title="从音效板移除这条音效">删除</button>
+        </div>
         <div class="hintline">拖动音效按钮可调整顺序；勾选「循环」后持续循环，再点一次停止。键盘 <kbd>X</kbd> 随时全停。自定义音效会随排练包一起导出。</div>
       </div>
     </div>
@@ -417,6 +428,7 @@ let thumbMap = Object.create(null);   /* src -> 缩略图（播放端抽好发�
 let sfxList = [];
 let sfxListSig = '';
 let sfxDragFrom = -1;
+let sfxSelSrc = '';
 let order = [];
 let idx = -1;
 let st = null;
@@ -828,6 +840,7 @@ function renderState() {
     const on = !!(st.sfxLoops && st.sfxLoops.indexOf(lb) >= 0) || !!sfxLoopPref[lb];
     if (cb.checked !== on) cb.checked = on;
   });
+  markSfxSel();
   $('#duck').checked = !!st.duck;
   const bs = isFinite(st.baseSpeed) ? st.baseSpeed : (st.speed || 1);
   if (document.activeElement !== $('#speed') && $('#speed').querySelector('option[value="' + bs + '"]')) $('#speed').value = String(bs);
@@ -1051,11 +1064,10 @@ function applyConsolePrefs(p) {
     try { localStorage.setItem('rp_sample_meters', meterWant ? '1' : '0'); } catch (e) {}
     cmd({ action: 'meters', v: meterWant });
   }
-  if (p.sfxLoop) {
-    Object.keys(p.sfxLoop).forEach(function (lb) { sfxLoopPref[lb] = !!p.sfxLoop[lb]; });
-    try { localStorage.setItem('rp_sample_sfxloop', JSON.stringify(sfxLoopPref)); } catch (e) {}
-    renderSfx();
-  }
+  Object.keys(sfxLoopPref).forEach(function (k) { delete sfxLoopPref[k]; });
+  if (p.sfxLoop) Object.keys(p.sfxLoop).forEach(function (lb) { sfxLoopPref[lb] = !!p.sfxLoop[lb]; });
+  try { localStorage.setItem('rp_sample_sfxloop', JSON.stringify(sfxLoopPref)); } catch (e) {}
+  renderSfx();
   toast('已套用排练包里的控制台设置');
 }
 
@@ -1095,7 +1107,7 @@ $('#imgAuto').addEventListener('change', function () { cmd({ action: 'imgAuto', 
 $('#thumbOn').addEventListener('change', function () { cmd({ action: 'thumbs', v: $('#thumbOn').checked }); });
 
 /* ---------- 音效板 ---------- */
-function sfxSigOf(list) { return (list || []).map(function (s) { return (s.label || '') + '|' + (s.src || ''); }).join('\n'); }
+function sfxSigOf(list) { return (list || []).map(function (s) { return (s.label || '') + '|' + (s.src || '') + '|' + (isFinite(s.vol) ? s.vol : 1); }).join('\n'); }
 function applySfxList(list) {
   if (!Array.isArray(list)) return;
   const clean = list.filter(function (s) { return s && s.src; });
@@ -1103,6 +1115,7 @@ function applySfxList(list) {
   if (sig === sfxListSig) return;
   sfxListSig = sig;
   sfxList = clean;
+  if (sfxSelSrc && !clean.some(function (x) { return x.src === sfxSelSrc; })) sfxSelSrc = '';
   renderSfx();
 }
 /* 音效按钮拖动排序（只改显示顺序，播放与标签不变） */
@@ -1136,8 +1149,16 @@ function renderSfx() {
     const b = document.createElement('button');
     b.className = 'sfx';
     b.setAttribute('data-label', s.label);
+    b.setAttribute('data-src', s.src);
     b.textContent = '♪ ' + s.label;
+    const bv = isFinite(s.vol) ? s.vol : 1;
+    if (Math.abs(bv - 1) > 0.001) {
+      const vb = document.createElement('span');
+      vb.className = 'vb'; vb.textContent = Math.round(bv * 100) + '%';
+      b.appendChild(vb);
+    }
     b.onclick = function () {
+      sfxSelSrc = s.src; markSfxSel();
       const active = (st && st.sfxActive) || [];
       if (active.indexOf(s.label) >= 0) { send({ k: 'cmd', action: 'sfxStop', label: s.label }); return; }
       send({ k: 'cmd', action: 'sfx', url: s.src, label: s.label });
@@ -1190,7 +1211,79 @@ function renderSfx() {
     em.textContent = '还没有音效，点「＋ 音效」或把音频拖进本窗口';
     row.appendChild(em);
   }
+  markSfxSel();
 }
+function sfxSelected() {
+  for (let i = 0; i < sfxList.length; i++) if (sfxList[i].src === sfxSelSrc) return sfxList[i];
+  return null;
+}
+function markSfxSel() {
+  document.querySelectorAll('#sfxRow button.sfx').forEach(function (b) {
+    b.classList.toggle('sel', b.getAttribute('data-src') === sfxSelSrc);
+  });
+  renderSfxEdit();
+}
+function renderSfxEdit() {
+  const box = $('#sfxEditRow');
+  const s = sfxSelected();
+  if (!s) { box.style.display = 'none'; return; }
+  box.style.display = 'flex';
+  const af = document.activeElement;
+  if (af !== $('#sfxEditName')) $('#sfxEditName').value = s.label;
+  const v = isFinite(s.vol) ? s.vol : 1;
+  if (af !== $('#sfxEditVol')) $('#sfxEditVol').value = Math.round(v * 100);
+  $('#sfxEditVolLbl').textContent = Math.round(v * 100) + '%';
+  $('#sfxEditVolLbl').classList.toggle('gain', v > 1);
+  if (af !== $('#sfxEditLoop')) $('#sfxEditLoop').checked = !!(sfxLoopPref[s.label] || (st && st.sfxLoops && st.sfxLoops.indexOf(s.label) >= 0));
+}
+$('#sfxEditName').addEventListener('change', function () {
+  const s = sfxSelected();
+  if (!s) return;
+  const nm = this.value.trim();
+  if (!nm) { this.value = s.label; return; }
+  if (nm === s.label) return;
+  const old = s.label;
+  if (Object.prototype.hasOwnProperty.call(sfxLoopPref, old)) {
+    sfxLoopPref[nm] = sfxLoopPref[old];
+    delete sfxLoopPref[old];
+    try { localStorage.setItem('rp_sample_sfxloop', JSON.stringify(sfxLoopPref)); } catch (e) {}
+  }
+  s.label = nm;
+  sfxListSig = sfxSigOf(sfxList);
+  renderSfx();
+  send({ k: 'cmd', action: 'sfxUpdate', label: old, patch: { label: nm } });
+  toast('音效已改名：' + nm);
+});
+$('#sfxEditVol').addEventListener('input', function () {
+  const s = sfxSelected();
+  if (!s) return;
+  const v = +this.value / 100;
+  s.vol = v;
+  $('#sfxEditVolLbl').textContent = this.value + '%';
+  $('#sfxEditVolLbl').classList.toggle('gain', v > 1);
+  sfxListSig = sfxSigOf(sfxList);
+  send({ k: 'cmd', action: 'sfxUpdate', label: s.label, patch: { vol: v } });
+});
+$('#sfxEditVol').addEventListener('change', function () { renderSfx(); });
+$('#sfxEditLoop').addEventListener('change', function () {
+  const s = sfxSelected();
+  if (!s) return;
+  sfxLoopPref[s.label] = this.checked;
+  try { localStorage.setItem('rp_sample_sfxloop', JSON.stringify(sfxLoopPref)); } catch (e) {}
+  send({ k: 'cmd', action: 'sfxLoop', label: s.label, v: this.checked });
+  renderSfx();
+});
+$('#sfxEditDel').addEventListener('click', function () {
+  const s = sfxSelected();
+  if (!s) return;
+  if (!confirm('从音效板删除「' + s.label + '」？')) return;
+  send({ k: 'cmd', action: 'sfxDelete', label: s.label });
+  sfxList = sfxList.filter(function (x) { return x.src !== s.src; });
+  sfxSelSrc = '';
+  sfxListSig = sfxSigOf(sfxList);
+  renderSfx();
+  toast('已删除音效：' + s.label);
+});
 
 const sfxRowEl = $('#sfxRow');
 sfxRowEl.addEventListener('dragover', function (e) {

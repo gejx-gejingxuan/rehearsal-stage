@@ -539,6 +539,26 @@ function playSfx(url, label) {
   sendState();
 }
 
+function seekSfx(label, t, ratio) {
+  let s = null;
+  pool.forEach(function (x) {
+    if (!s && x.label === label && x.el.src && !x.el.paused) s = x;
+  });
+  if (!s) return false;
+  const el = s.el;
+  let at = Number(t);
+  if (isFinite(ratio) && isFinite(el.duration) && el.duration > 0) at = Number(ratio) * el.duration;
+  if (!isFinite(at)) at = 0;
+  at = Math.max(0, at);
+  if (isFinite(el.duration) && el.duration > 0) {
+    const cap = el.loop ? Math.max(0, el.duration - 0.05) : el.duration;
+    at = Math.min(at, cap);
+  }
+  try { el.currentTime = at; } catch (e) { return false; }
+  sendState();
+  return true;
+}
+
 function onSfxEnd(el) {
   const s = slotOf(el);
   if (s) {
@@ -915,6 +935,7 @@ function handleCmd(m) {
     case 'sfxVol': setSfxVol(m.v); break;
     case 'sfx': playSfx(m.url, m.label); break;
     case 'sfxStop': stopSfx(m.label); break;
+    case 'sfxSeek': seekSfx(m.label, m.t, m.r); break;
     case 'sfxLoop': sfxLoopCfg[m.label] = !!m.v; applyLoopToSlots(); break;
     case 'speed':
       baseSpeed = clamp(m.x, 0.25, 4);
@@ -961,6 +982,19 @@ bc.onmessage = function (e) {
     lastConsoleAt = Date.now();
     const list = m.files || [];
     if (list.length) addMedia(list);
+    return;
+  }
+  if (m.k === 'sfxorder') {
+    lastConsoleAt = Date.now();
+    const srcs = Array.isArray(m.srcs) ? m.srcs : [];
+    const out = [];
+    srcs.forEach(function (src) {
+      const hit = sfxItems.filter(function (x) { return x.src === src; })[0];
+      if (hit && out.indexOf(hit) < 0) out.push(hit);
+    });
+    sfxItems.forEach(function (x) { if (out.indexOf(x) < 0) out.push(x); });
+    sfxItems = out;
+    broadcastSfx(true);
     return;
   }
   if (m.k === 'clips') {

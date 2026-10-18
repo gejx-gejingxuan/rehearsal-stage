@@ -62,11 +62,17 @@
   button.on{border-color:var(--amber);color:var(--amber);background:rgba(255,176,32,.12);font-weight:600}
   button.warnon{border-color:var(--amber);color:#0c0e12;background:var(--amber);font-weight:700}
   button.sfx{padding:9px 15px;font-size:13.5px}
+  button.sfx.dragging{opacity:.4}
+  button.sfx.dropL{box-shadow:inset 3px 0 0 var(--cyan)}
+  button.sfx.dropR{box-shadow:inset -3px 0 0 var(--cyan)}
+  #sfxRow.dragover{outline:1px dashed var(--cyan);outline-offset:2px}
   #sfxProg{margin-top:10px}
   .sfxp{display:flex;align-items:center;gap:8px;margin-top:5px}
   .sfxp .nm{width:150px;font-size:11.5px;color:var(--ink2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .sfxp .lp{flex:0 0 auto;font-size:10px;color:var(--cyan);border:1px solid var(--cyan);border-radius:3px;padding:0 4px;line-height:1.4}
-  .sfxp .track{flex:1;height:6px;background:var(--sunk);border:1px solid var(--line);border-radius:4px;overflow:hidden}
+  .sfxp .track{flex:1;position:relative;height:9px;background:var(--sunk);border:1px solid var(--line);border-radius:5px;overflow:hidden;cursor:pointer;touch-action:none}
+  .sfxp .track:hover{border-color:var(--amber)}
+  .sfxp .track.seeking{box-shadow:0 0 0 2px rgba(255,176,32,.25)}
   .sfxp .track i{display:block;height:100%;width:0;background:var(--amber)}
   .sfxp .tm{flex:0 0 auto;font-family:var(--mono);font-size:11px;color:var(--ink3);text-align:right;min-width:94px}
   button.go{min-width:104px;font-size:15px;font-weight:700;color:#04120a;background:var(--green);border-color:#1ea855;letter-spacing:1px}
@@ -291,7 +297,7 @@
       </div>
 
       <div class="card">
-        <h2 class="sfx">音效板 SFX <em>点了立即在大屏响；4 条通道可同时响，再点一次＝停该条</em></h2>
+        <h2 class="sfx">音效板 SFX <em>点了立即在大屏响；拖动按钮可调整顺序；4 条通道可同时响，再点一次＝停该条</em></h2>
         <div class="row" id="sfxRow"></div>
         <div id="sfxProg" style="display:none"></div>
         <div class="row" style="margin-top:9px">
@@ -299,7 +305,7 @@
           <span class="lab" style="min-width:0;color:var(--ink3)">支持 mp3 / wav / m4a / ogg / flac；也可以直接拖进本窗口</span>
         </div>
         <div class="row" id="sfxLoopRow" style="margin-top:9px"><span class="lab">循环</span></div>
-        <div class="hintline">勾选「循环」后该音效持续循环，再点一次停止。键盘 <kbd>X</kbd> 随时全停。自定义音效会随排练包一起导出。</div>
+        <div class="hintline">拖动音效按钮可调整顺序；勾选「循环」后持续循环，再点一次停止。键盘 <kbd>X</kbd> 随时全停。自定义音效会随排练包一起导出。</div>
       </div>
     </div>
   </div>
@@ -407,6 +413,7 @@ let clips = [];
 let thumbMap = Object.create(null);   /* src -> 缩略图（播放端抽好发过来） */
 let sfxList = [];
 let sfxListSig = '';
+let sfxDragFrom = -1;
 let order = [];
 let idx = -1;
 let st = null;
@@ -1095,12 +1102,34 @@ function applySfxList(list) {
   sfxList = clean;
   renderSfx();
 }
+/* 音效按钮拖动排序（只改显示顺序，播放与标签不变） */
+function clearSfxDrop() {
+  const row = $('#sfxRow');
+  if (!row) return;
+  row.classList.remove('dragover');
+  row.querySelectorAll('button.sfx').forEach(function (b) { b.classList.remove('dropL', 'dropR', 'dragging'); });
+}
+function sfxDropMove(pos, side) {
+  const from = sfxDragFrom;
+  if (from < 0) return;
+  let t = pos + (side > 0 ? 1 : 0);
+  if (from < t) t--;
+  sfxDragFrom = -1;
+  clearSfxDrop();
+  if (t === from || t < 0) return;
+  const item = sfxList.splice(from, 1)[0];
+  sfxList.splice(t, 0, item);
+  sfxListSig = sfxSigOf(sfxList);
+  renderSfx();
+  send({ k: 'sfxorder', srcs: sfxList.map(function (s) { return s.src; }) });
+  toast('音效顺序已调整 · 现在第 ' + (t + 1) + ' 位');
+}
 function renderSfx() {
   const row = $('#sfxRow');
   const lrow = $('#sfxLoopRow');
   row.innerHTML = '';
   lrow.innerHTML = '<span class="lab">循环</span>';
-  sfxList.forEach(function (s) {
+  sfxList.forEach(function (s, pos) {
     const b = document.createElement('button');
     b.className = 'sfx';
     b.setAttribute('data-label', s.label);
@@ -1109,6 +1138,28 @@ function renderSfx() {
       const active = (st && st.sfxActive) || [];
       if (active.indexOf(s.label) >= 0) { send({ k: 'cmd', action: 'sfxStop', label: s.label }); return; }
       send({ k: 'cmd', action: 'sfx', url: s.src, label: s.label });
+    };
+    b.draggable = true;
+    b.ondragstart = function (e) {
+      sfxDragFrom = pos;
+      try { e.dataTransfer.setData('text/plain', 'sfx:' + pos); e.dataTransfer.effectAllowed = 'move'; } catch (er) {}
+      b.classList.add('dragging');
+    };
+    b.ondragend = function () { clearSfxDrop(); sfxDragFrom = -1; };
+    b.ondragover = function (e) {
+      if (sfxDragFrom < 0) return;
+      e.preventDefault(); e.stopPropagation();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+      const r = b.getBoundingClientRect();
+      const side = (e.clientX - r.left) > r.width / 2 ? 1 : 0;
+      row.querySelectorAll('button.sfx').forEach(function (x) { x.classList.remove('dropL', 'dropR'); });
+      b.classList.add(side > 0 ? 'dropR' : 'dropL');
+    };
+    b.ondrop = function (e) {
+      if (sfxDragFrom < 0) return;
+      e.preventDefault(); e.stopPropagation();
+      const r = b.getBoundingClientRect();
+      sfxDropMove(pos, (e.clientX - r.left) > r.width / 2 ? 1 : 0);
     };
     row.appendChild(b);
 
@@ -1137,6 +1188,22 @@ function renderSfx() {
     row.appendChild(em);
   }
 }
+
+const sfxRowEl = $('#sfxRow');
+sfxRowEl.addEventListener('dragover', function (e) {
+  if (sfxDragFrom < 0) return;
+  e.preventDefault();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+  sfxRowEl.classList.add('dragover');
+});
+sfxRowEl.addEventListener('dragleave', function (e) {
+  if (e.target === sfxRowEl) sfxRowEl.classList.remove('dragover');
+});
+sfxRowEl.addEventListener('drop', function (e) {
+  if (sfxDragFrom < 0) return;
+  e.preventDefault();
+  sfxDropMove(sfxList.length - 1, 1);
+});
 
 /* 音效播放进度：0.5s 一次状态，60ms 插值刷新，进度条平滑走 */
 function paintSfxProgress() {
@@ -1191,6 +1258,51 @@ function paintSfxProgress() {
     if (tm) tm.textContent = fmt(t) + (d > 0 ? (' / ' + fmt(d)) : ' / --:--');
   });
 }
+
+/* 音效进度条拖动定位：按下就地跳转，按住拖动持续跟随 */
+let sfxSeekDrag = null;
+function sfxSeekAt(e, track) {
+  if (!track) return;
+  const row = track.parentNode;
+  const label = row.getAttribute('data-label');
+  let x = null;
+  (sfxProg || []).forEach(function (it) { if (!x && it.label === label) x = it; });
+  const d = x ? (Number(x.d) || 0) : 0;
+  const r = track.getBoundingClientRect();
+  const ratio = r.width > 0 ? Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) : 0;
+  const bar = track.querySelector('i');
+  if (bar) bar.style.width = (ratio * 100).toFixed(2) + '%';
+  if (x && d > 0) {
+    const t = x.loop ? Math.min(ratio * d, Math.max(0, d - 0.05)) : ratio * d;
+    x.t = t; sfxProgAt = Date.now();
+    const tm = row.querySelector('.tm');
+    if (tm) tm.textContent = fmt(t) + ' / ' + fmt(d);
+  }
+  send({ k: 'cmd', action: 'sfxSeek', label: label, r: ratio });
+}
+const sfxProgEl = $('#sfxProg');
+sfxProgEl.addEventListener('pointerdown', function (e) {
+  const track = e.target && e.target.closest ? e.target.closest('.track') : null;
+  if (!track) return;
+  e.preventDefault();
+  try { track.setPointerCapture(e.pointerId); } catch (er) {}
+  track.classList.add('seeking');
+  sfxSeekDrag = { track: track, id: e.pointerId };
+  sfxSeekAt(e, track);
+});
+sfxProgEl.addEventListener('pointermove', function (e) {
+  if (!sfxSeekDrag || e.pointerId !== sfxSeekDrag.id) return;
+  e.preventDefault();
+  sfxSeekAt(e, sfxSeekDrag.track);
+});
+function endSfxSeek(e) {
+  if (!sfxSeekDrag) return;
+  sfxSeekAt(e, sfxSeekDrag.track);
+  sfxSeekDrag.track.classList.remove('seeking');
+  sfxSeekDrag = null;
+}
+sfxProgEl.addEventListener('pointerup', endSfxSeek);
+sfxProgEl.addEventListener('pointercancel', endSfxSeek);
 
 $('#bUp').onclick = function () { move(-1); };
 $('#bDown').onclick = function () { move(1); };

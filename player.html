@@ -9,6 +9,7 @@
   body.hidecursor,body.hidecursor *{cursor:none!important}
   #stage{position:fixed;inset:0;background:#000;overflow:hidden}
   #v{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000;z-index:0}
+  #freeze{position:absolute;inset:0;width:100%;height:100%;z-index:5;display:none;pointer-events:none}
   #img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000;z-index:0}
   #tools{position:absolute;right:14px;bottom:14px;z-index:12;display:none;gap:8px}
   #tools button{font:inherit;font-size:13px;padding:7px 12px;border-radius:8px;border:1px solid rgba(255,255,255,.3);background:rgba(0,0,0,.5);color:#fff;cursor:pointer}
@@ -28,6 +29,7 @@
 <body>
 <div id="stage">
   <video id="v" playsinline preload="auto"></video>
+  <canvas id="freeze"></canvas>
   <img id="img" alt="" style="display:none">
   <div id="black"></div>
   <div id="badge"></div>
@@ -61,6 +63,7 @@ const bc = new BroadcastChannel(CH);
 const $ = function (s) { return document.querySelector(s); };
 
 const v = document.getElementById('v');
+const freezeEl = document.getElementById('freeze');
 const imgEl = document.getElementById('img');
 const badge = document.getElementById('badge');
 const sfxTag = document.getElementById('sfxTag');
@@ -87,6 +90,7 @@ let lastConsoleAt = 0;
 let pendingSeek = null;
 let fps = 0;
 let osdTimer = null, osdOn = false;
+let freezeOn = false, freezeCtx = null, freezeSafety = null;
 
 /* ---------------- 小工具 ---------------- */
 function clamp(x, a, b) { x = Number(x); if (!isFinite(x)) x = a; return x < a ? a : x > b ? b : x; }
@@ -141,6 +145,54 @@ function setImgPaused(on) {
   else if (!on && imgPaused) { imgPaused = false; imgT0 = Date.now(); }
 }
 function applyFit() { v.style.objectFit = fit; imgEl.style.objectFit = fit; }
+/* 切片段先把上一帧定格，等新画面真正出来再撤掉，消除解码器重开时的黑屏 */
+function hideFreeze() {
+  if (freezeSafety) { clearTimeout(freezeSafety); freezeSafety = null; }
+  freezeOn = false;
+  freezeEl.style.display = 'none';
+}
+function drawFreezeFrame(el, sw, sh) {
+  const stage = document.getElementById('stage');
+  const w = stage.clientWidth || window.innerWidth;
+  const h = stage.clientHeight || window.innerHeight;
+  if (!w || !h || !sw || !sh) return false;
+  if (freezeEl.width !== w) freezeEl.width = w;
+  if (freezeEl.height !== h) freezeEl.height = h;
+  if (!freezeCtx) freezeCtx = freezeEl.getContext('2d');
+  if (!freezeCtx) return false;
+  freezeCtx.fillStyle = '#000';
+  freezeCtx.fillRect(0, 0, w, h);
+  const sc = fit === 'cover' ? Math.max(w / sw, h / sh) : Math.min(w / sw, h / sh);
+  const dw = sw * sc, dh = sh * sc;
+  try { freezeCtx.drawImage(el, (w - dw) / 2, (h - dh) / 2, dw, dh); } catch (e) { return false; }
+  freezeOn = true;
+  freezeEl.style.display = 'block';
+  if (freezeSafety) clearTimeout(freezeSafety);
+  freezeSafety = setTimeout(function () { if (freezeOn) hideFreeze(); }, 4000);
+  return true;
+}
+function freezeCurrentFrame() {
+  if (imgMode) {
+    if (imgEl.complete && imgEl.naturalWidth && imgEl.naturalHeight) {
+      return drawFreezeFrame(imgEl, imgEl.naturalWidth, imgEl.naturalHeight);
+    }
+    return false;
+  }
+  if (v.readyState >= 2 && v.videoWidth && v.videoHeight) {
+    return drawFreezeFrame(v, v.videoWidth, v.videoHeight);
+  }
+  return false;
+}
+function releaseFreeze() {
+  if (!freezeOn) return;
+  const fin = function () { if (freezeOn) hideFreeze(); };
+  if (!imgMode && !v.paused && typeof v.requestVideoFrameCallback === 'function') {
+    try { v.requestVideoFrameCallback(fin); } catch (e) {}
+    setTimeout(fin, 350);
+  } else {
+    setTimeout(fin, 70);
+  }
+}
 function send(m, transfer) { m.from = ME; if (transfer) bc.postMessage(m, transfer); else bc.postMessage(m); }
 function toast(text) { send({ k: 'toast', text: text }); }
 function osd(text, ms) {
@@ -670,6 +722,10 @@ function loadAt(i, at) {
   if (j !== i) { osd('缺素材：' + stripNum(clips[i].label) + ' → ' + stripNum(clips[j].label), 1400); i = j; }
   const c = clips[i];
   const abs = absUrl(c.src);
+  const nextImg = isImgClip(c);
+  const sameImg = nextImg && imgMode && idx === i && imgEl.src === abs;
+  const sameVid = !nextImg && !imgMode && v.src === abs;
+  if (nextImg ? !sameImg : !sameVid) freezeCurrentFrame();
   if (isImgClip(c)) {
     const same = imgMode && idx === i && imgEl.src === abs;
     idx = i;
@@ -680,6 +736,7 @@ function loadAt(i, at) {
       imgEl.style.display = 'block';
       imgEl.style.objectFit = fit;
       imgEl.src = abs;
+      if (imgEl.complete && imgEl.naturalWidth) releaseFreeze();
     }
     applyClipAudio();
     paint(); sendState();
@@ -951,8 +1008,11 @@ v.addEventListener('loadedmetadata', function () {
 });
 v.addEventListener('loadeddata', function () {
   if (pendingSeek != null) { try { v.currentTime = pendingSeek; } catch (e) {} pendingSeek = null; }
+  releaseFreeze();
 });
 v.addEventListener('play', function () { paint(); sendState(); });
+v.addEventListener('playing', function () { releaseFreeze(); });
+v.addEventListener('seeked', function () { releaseFreeze(); });
 v.addEventListener('pause', function () { paint(); sendState(); });
 v.addEventListener('ended', onEnded);
 v.addEventListener('timeupdate', function () {
@@ -961,9 +1021,12 @@ v.addEventListener('timeupdate', function () {
   }
 });
 v.addEventListener('error', function () {
+  releaseFreeze();
   const c = clipNow();
   if (c) toast('视频加载失败：' + stripNum(c.label));
 });
+imgEl.addEventListener('load', function () { releaseFreeze(); });
+imgEl.addEventListener('error', function () { releaseFreeze(); });
 
 /* ---------------- 指令 ---------------- */
 function applyLoopToSlots() {

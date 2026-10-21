@@ -172,16 +172,23 @@ function drawFreezeFrame(el, sw, sh) {
   return true;
 }
 function freezeCurrentFrame() {
+  let ok = false;
   if (imgMode) {
     if (imgEl.complete && imgEl.naturalWidth && imgEl.naturalHeight) {
-      return drawFreezeFrame(imgEl, imgEl.naturalWidth, imgEl.naturalHeight);
+      ok = drawFreezeFrame(imgEl, imgEl.naturalWidth, imgEl.naturalHeight);
     }
-    return false;
+  } else if (v.readyState >= 2 && v.videoWidth && v.videoHeight) {
+    ok = drawFreezeFrame(v, v.videoWidth, v.videoHeight);
   }
-  if (v.readyState >= 2 && v.videoWidth && v.videoHeight) {
-    return drawFreezeFrame(v, v.videoWidth, v.videoHeight);
+  /* 连续快速切段时当前帧还没解码出来，就继续显示上一张定格图，别退回黑屏 */
+  if (!ok && freezeEl.width && freezeEl.height) {
+    freezeOn = true;
+    freezeEl.style.display = 'block';
+    if (freezeSafety) clearTimeout(freezeSafety);
+    freezeSafety = setTimeout(function () { if (freezeOn) hideFreeze(); }, 4000);
+    ok = true;
   }
-  return false;
+  return ok;
 }
 function releaseFreeze() {
   if (!freezeOn) return;

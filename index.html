@@ -88,8 +88,9 @@ a.back:hover{text-decoration:underline}
 </div>
 
 <script>
-function w(url, name, w2, h2) {
-  window.open(url, name, 'width=' + w2 + ',height=' + h2 + ',menubar=no,toolbar=no');
+const BUILD = '20261021a';
+function w(page, name, w2, h2) {
+  window.open(page + '?v=' + BUILD, name, 'width=' + w2 + ',height=' + h2 + ',menubar=no,toolbar=no');
 }
 addEventListener('click', function (e) {
   const id = e.target && e.target.id;
